@@ -1,0 +1,11 @@
+{
+  "name": "foodos-backend",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node server.js"
+  },
+  "dependencies": {}
+}
