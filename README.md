@@ -227,29 +227,56 @@ npm run build
 npm run preview
 ```
 
-## Backend Status
+## Backend Roadmap
 
-The backend is currently only a placeholder entry point. It can be started for a smoke check, but it does not serve application APIs yet:
+The backend is being built phase by phase so the platform grows in a controlled way. Phase 2 foundation is now started with an Express app shell, environment loading, database config stub, shared middleware, and route modules.
+
+### Phase 2: Backend Foundation
+
+- API framework and application configuration
+- PostgreSQL schema and migrations
+- Core models for users, restaurants, delivery partners, and orders
+- OTP authentication, JWT sessions, and role-based access
+- Customer, restaurant, delivery partner, and admin API structure
+
+### Phase 3: Orders and Payments
+
+- Cart, address, coupon, and checkout APIs
+- Razorpay integration and webhook handling
+- Payment verification, failure handling, and retry flow
+- Wallet, refund, commission, and settlement logic
+
+### Phase 4: Delivery, Maps, and Realtime
+
+- Delivery assignment logic
+- WebSocket-based order updates
+- Google Maps, GPS, route, ETA, and live location features
+- Delivery-zone validation and order tracking synchronization
+
+### Phase 5: Notifications, Security, and Operations
+
+- Firebase push notifications
+- SMS and email notifications
+- Validation, error handling, logging, and rate limits
+- HTTPS, environment variables, secret protection, and backups
+
+### Phase 6: Admin Reporting and Scale
+
+- Analytics APIs and reporting endpoints
+- Customer, restaurant, and delivery partner management APIs
+- Support, GST, invoices, and operational dashboards
+- Load, monitoring, and deployment readiness
+
+### Backend Smoke Check
+
+The backend root can be started for a smoke check:
 
 ```powershell
 cd C:\food\backend
-node server.js
+npm run dev
 ```
 
-The backend implementation still needs:
-
-- API framework and application configuration
-- PostgreSQL database and migrations
-- Redis for carts, sessions, and realtime state
-- OTP authentication, JWT sessions, and role-based access
-- Customer, restaurant, delivery partner, admin, and order APIs
-- Razorpay payment integration and webhook handling
-- Coupon, wallet, commission, and settlement logic
-- WebSocket-based order and location updates
-- Firebase push notifications, SMS, and email notifications
-- Image storage for restaurant, menu, and profile images
-- Maps, distance, ETA, and delivery-zone services
-- Validation, error handling, logging, security, and rate limits
+The current backend code is a scaffold for the phase-wise buildout, not the final production server.
 
 ## Testing Status
 
