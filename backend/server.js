@@ -1,4 +1,9 @@
-// Entry point for the Foodos backend API server.
-// Routers are mounted here as each module (auth, customer, restaurant, delivery, admin) is built.
+import 'dotenv/config'
+import app from './app.js'
+import { getEnvironment } from './config/environment.js'
 
-console.log('Foodos backend — not yet implemented')
+const { port } = getEnvironment()
+
+app.listen(port, () => {
+	console.log(`Foodos backend running on http://localhost:${port}`)
+})
