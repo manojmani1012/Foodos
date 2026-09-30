@@ -1,13 +1,15 @@
 import React, { useState } from 'react'
 import './FoodDetailScreen.css'
-import { getItem, ADD_ONS } from '../../../data/menuData'
 
-export default function FoodDetailScreen({ itemId, onBack, onAddToCart }) {
-  const item = getItem(itemId)
+// The item comes from the restaurant screen, which already loaded the whole
+// menu, so opening a dish costs no extra request.
+export default function FoodDetailScreen({ item, onBack, onAddToCart }) {
   const [qty, setQty] = useState(1)
   const [selectedAddOns, setSelectedAddOns] = useState([])
 
   if (!item) return null
+
+  const addOns = (item.addOns || []).filter(a => a.isAvailable)
 
   function toggleAddOn(id) {
     setSelectedAddOns(prev =>
@@ -15,10 +17,8 @@ export default function FoodDetailScreen({ itemId, onBack, onAddToCart }) {
     )
   }
 
-  const addOnTotal = selectedAddOns.reduce((sum, id) => {
-    const a = ADD_ONS.find(x => x.id === id)
-    return sum + (a ? a.price : 0)
-  }, 0)
+  const chosenAddOns = addOns.filter(a => selectedAddOns.includes(a.id))
+  const addOnTotal = chosenAddOns.reduce((sum, a) => sum + a.price, 0)
   const total = (item.price + addOnTotal) * qty
 
   return (
@@ -39,24 +39,26 @@ export default function FoodDetailScreen({ itemId, onBack, onAddToCart }) {
         <div className="fd-price">₹{item.price}</div>
         <p className="fd-desc">{item.desc}</p>
 
-        <div className="fd-section">
-          <div className="fd-section-title">Add-ons</div>
-          <div className="fd-addon-list">
-            {ADD_ONS.map(a => (
-              <label key={a.id} className="fd-addon-row">
-                <span className="fd-addon-label">
-                  <input
-                    type="checkbox"
-                    checked={selectedAddOns.includes(a.id)}
-                    onChange={() => toggleAddOn(a.id)}
-                  />
-                  {a.label}
-                </span>
-                <span className="fd-addon-price">+₹{a.price}</span>
-              </label>
-            ))}
+        {addOns.length > 0 && (
+          <div className="fd-section">
+            <div className="fd-section-title">Add-ons</div>
+            <div className="fd-addon-list">
+              {addOns.map(a => (
+                <label key={a.id} className="fd-addon-row">
+                  <span className="fd-addon-label">
+                    <input
+                      type="checkbox"
+                      checked={selectedAddOns.includes(a.id)}
+                      onChange={() => toggleAddOn(a.id)}
+                    />
+                    {a.label}
+                  </span>
+                  <span className="fd-addon-price">+₹{a.price}</span>
+                </label>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="fd-section">
           <div className="fd-section-title">Quantity</div>
@@ -70,9 +72,10 @@ export default function FoodDetailScreen({ itemId, onBack, onAddToCart }) {
 
       <button
         className="fd-add-btn"
-        onClick={() => onAddToCart({ itemId: item.id, qty, addOns: selectedAddOns })}
+        disabled={item.isAvailable === false}
+        onClick={() => onAddToCart({ item, qty, addOns: chosenAddOns })}
       >
-        Add to Cart · ₹{total}
+        {item.isAvailable === false ? 'Currently unavailable' : `Add to Cart · ₹${total}`}
       </button>
     </div>
   )

@@ -240,3 +240,36 @@
   cursor: pointer;
   box-shadow: 0 8px 20px rgba(26,92,53,0.35);
 }
+
+.cart-coupon-error {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: #a4281f;
+}
+
+/* The bill dims while a new quote is in flight, so a stale total never looks
+   final. */
+.cart-bill.updating { opacity: 0.55; }
+
+.cart-bill-error {
+  padding: 14px;
+  border: 1px solid #e0b4b0;
+  border-radius: 10px;
+  background: #fdecea;
+  color: #a4281f;
+  font-size: 13px;
+  text-align: center;
+}
+
+.cart-coupon-remove {
+  margin-left: 8px;
+  border: none;
+  background: none;
+  color: #1a5c35;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.cart-place-order:disabled { opacity: 0.6; cursor: not-allowed; }

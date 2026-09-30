@@ -1,42 +1,63 @@
 import React, { useState } from 'react'
 import './HomeScreen.css'
 import FoodosLogo from '../../../components/FoodosLogo'
-import { RESTAURANTS } from '../../../data/menuData'
+import { fetchCuisines, fetchFavourites, fetchOffers, fetchRestaurants } from '../../../lib/catalogue.js'
+import { fetchOrders } from '../../../lib/orders.js'
+import { useAuth } from '../../../lib/AuthContext.jsx'
+import { useAsync, useDebounced } from '../../../lib/useAsync.js'
 
-const CATEGORIES = [
-  { id: 1, label: 'Biryani', emoji: '🍛' },
-  { id: 2, label: 'Pizza', emoji: '🍕' },
-  { id: 3, label: 'Burger', emoji: '🍔' },
-  { id: 4, label: 'Chicken', emoji: '🍗' },
-  { id: 5, label: 'Healthy', emoji: '🥗' },
-  { id: 6, label: 'Desserts', emoji: '🍰' },
-]
+const STATUS_LABEL = {
+  pending: 'Pending',
+  confirmed: 'Confirmed',
+  preparing: 'Preparing',
+  ready: 'Ready',
+  picked_up: 'Picked up',
+  on_the_way: 'On the way',
+  delivered: 'Delivered',
+  cancelled: 'Cancelled',
+}
 
-const TOP_OFFERS = [
-  { id: 1, label: '50% OFF', sub: 'Up to ₹100 on first order', code: 'FOODNEW', color: '#1a5c35' },
-  { id: 2, label: 'FREE DELIVERY', sub: 'On orders above ₹299', code: 'FREEDEL', color: '#e65100' },
-  { id: 3, label: '20% OFF', sub: 'On orders above ₹499', code: 'SAVE20', color: '#6a1b9a' },
-  { id: 4, label: '₹75 OFF', sub: 'Weekend special', code: 'WEEKEND75', color: '#1565c0' },
-]
+const STATUS_TONE = { delivered: 'delivered', cancelled: 'cancelled' }
 
-export default function HomeScreen({ onSelectRestaurant, onGoProfile, orders = [], favourites = [], onToggleFavourite, initialTab = 'home' }) {
+export default function HomeScreen({ onSelectRestaurant, onGoProfile, onOpenOrder, favourites = [], onToggleFavourite, initialTab = 'home' }) {
+  const { isSignedIn } = useAuth()
   const [activeTab, setActiveTab] = useState(initialTab)
   const [search, setSearch] = useState('')
   const [activeCat, setActiveCat] = useState(null)
   const [showAllOffers, setShowAllOffers] = useState(false)
-  const [selectedOrder, setSelectedOrder] = useState(null)
 
-  const filtered = RESTAURANTS.filter(r => {
-    if (!search) return true
-    const q = search.toLowerCase()
-    return r.name.toLowerCase().includes(q) || r.cuisine.toLowerCase().includes(q)
-  })
-  const favouriteRestaurants = RESTAURANTS.filter(r => favourites.includes(r.id))
-  const visibleOffers = showAllOffers ? TOP_OFFERS : TOP_OFFERS.slice(0, 2)
-  const activeCatLabel = CATEGORIES.find(c => c.id === activeCat)?.label
-  const homeRestaurants = activeCatLabel
-    ? RESTAURANTS.filter(r => r.cuisine.toLowerCase().includes(activeCatLabel.toLowerCase()))
-    : RESTAURANTS
+  // Searching and filtering happen on the server, so the phone never holds the
+  // whole catalogue. Typing is debounced to avoid a request per keystroke.
+  const settledSearch = useDebounced(search)
+
+  const restaurantsQuery = useAsync(
+    () => fetchRestaurants({ search: settledSearch, cuisine: activeCat }),
+    [settledSearch, activeCat],
+  )
+  const cuisinesQuery = useAsync(fetchCuisines, [])
+  const offersQuery = useAsync(fetchOffers, [])
+
+  const restaurants = restaurantsQuery.data?.restaurants ?? []
+  const categories = cuisinesQuery.data ?? []
+  const allOffers = offersQuery.data ?? []
+
+  // The search tab and the home list read from the same request; the difference
+  // is only which one the user is looking at.
+  const filtered = restaurants
+  const homeRestaurants = restaurants
+  const favouritesQuery = useAsync(
+    () => (isSignedIn ? fetchFavourites() : Promise.resolve([])),
+    [isSignedIn, favourites.length],
+  )
+  const favouriteRestaurants = favouritesQuery.data ?? []
+
+  // Reloaded whenever the tab is opened, so an order placed moments ago appears.
+  const ordersQuery = useAsync(
+    () => (isSignedIn ? fetchOrders() : Promise.resolve([])),
+    [isSignedIn, activeTab],
+  )
+  const orders = ordersQuery.data ?? []
+  const visibleOffers = showAllOffers ? allOffers : allOffers.slice(0, 2)
 
   return (
     <div className="home-screen">
@@ -101,7 +122,8 @@ export default function HomeScreen({ onSelectRestaurant, onGoProfile, orders = [
                 <button className="see-all" onClick={() => setActiveTab('search')}>See all</button>
               </div>
               <div className="categories-row">
-                {CATEGORIES.map(cat => (
+                {cuisinesQuery.loading && <div className="row-hint">Loading…</div>}
+                {categories.map(cat => (
                   <button
                     key={cat.id}
                     className={`cat-chip ${activeCat === cat.id ? 'active' : ''}`}
@@ -136,7 +158,7 @@ export default function HomeScreen({ onSelectRestaurant, onGoProfile, orders = [
             {/* Top Restaurants */}
             <div className="section">
               <div className="section-header">
-                <span className="section-title">{activeCatLabel ? `${activeCatLabel} Restaurants` : 'Top Restaurants'}</span>
+                <span className="section-title">{activeCat ? `${activeCat} Restaurants` : 'Top Restaurants'}</span>
                 <button className="see-all" onClick={() => setActiveTab('search')}>See all</button>
               </div>
               <div className="restaurant-list">
@@ -149,7 +171,11 @@ export default function HomeScreen({ onSelectRestaurant, onGoProfile, orders = [
                     onToggleFav={() => onToggleFavourite?.(r.id)}
                   />
                 ))}
-                {homeRestaurants.length === 0 && (
+                {restaurantsQuery.loading && <RestaurantSkeletons />}
+                {restaurantsQuery.error && (
+                  <LoadFailed message={restaurantsQuery.error.message} onRetry={restaurantsQuery.reload} />
+                )}
+                {!restaurantsQuery.loading && !restaurantsQuery.error && homeRestaurants.length === 0 && (
                   <div className="empty-state">
                     <span style={{ fontSize: 40 }}>🍽️</span>
                     <p>No restaurants in this category</p>
@@ -175,7 +201,11 @@ export default function HomeScreen({ onSelectRestaurant, onGoProfile, orders = [
                   onToggleFav={() => onToggleFavourite?.(r.id)}
                 />
               ))}
-              {filtered.length === 0 && (
+              {restaurantsQuery.loading && <RestaurantSkeletons />}
+              {restaurantsQuery.error && (
+                <LoadFailed message={restaurantsQuery.error.message} onRetry={restaurantsQuery.reload} />
+              )}
+              {!restaurantsQuery.loading && !restaurantsQuery.error && filtered.length === 0 && (
                 <div className="empty-state">
                   <span style={{ fontSize: 40 }}>🔍</span>
                   <p>No restaurants found</p>
@@ -190,29 +220,32 @@ export default function HomeScreen({ onSelectRestaurant, onGoProfile, orders = [
             <div className="section-header">
               <span className="section-title">My Orders</span>
             </div>
-            {orders.length === 0 ? (
+            {ordersQuery.loading ? (
+              <RestaurantSkeletons count={2} />
+            ) : orders.length === 0 ? (
               <div className="empty-state">
                 <span style={{ fontSize: 40 }}>📦</span>
-                <p>No orders yet</p>
+                <p>{isSignedIn ? 'No orders yet' : 'Sign in to see your orders'}</p>
               </div>
             ) : (
               <div className="orders-list">
-                {orders.map(o => {
-                  const restaurant = RESTAURANTS.find(r => r.id === o.restaurantId)
-                  return (
-                    <div className="order-row" key={o.id} onClick={() => setSelectedOrder(o)}>
-                      <div className="order-row-emoji">{restaurant?.emoji || '🍽️'}</div>
-                      <div className="order-row-info">
-                        <div className="order-row-name">{restaurant?.name || 'Restaurant'}</div>
-                        <div className="order-row-meta">Order #{o.id} · {o.date}</div>
-                      </div>
-                      <div className="order-row-right">
-                        <div className="order-row-total">₹{o.total}</div>
-                        <span className={`order-status-pill ${o.status === 'Delivered' ? 'delivered' : 'active'}`}>{o.status}</span>
+                {orders.map(o => (
+                  <div className="order-row" key={o.id} onClick={() => onOpenOrder?.(o.id)}>
+                    <div className="order-row-emoji">🍽️</div>
+                    <div className="order-row-info">
+                      <div className="order-row-name">{o.restaurant?.name || 'Restaurant'}</div>
+                      <div className="order-row-meta">
+                        #{o.orderNumber} · {new Date(o.placedAt).toLocaleDateString()} · {o.itemCount} item{o.itemCount === 1 ? '' : 's'}
                       </div>
                     </div>
-                  )
-                })}
+                    <div className="order-row-right">
+                      <div className="order-row-total">₹{o.total}</div>
+                      <span className={`order-status-pill ${STATUS_TONE[o.status] || 'active'}`}>
+                        {STATUS_LABEL[o.status] || o.status}
+                      </span>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -223,10 +256,12 @@ export default function HomeScreen({ onSelectRestaurant, onGoProfile, orders = [
             <div className="section-header">
               <span className="section-title">Favourites</span>
             </div>
-            {favouriteRestaurants.length === 0 ? (
+            {favouritesQuery.loading ? (
+              <RestaurantSkeletons />
+            ) : favouriteRestaurants.length === 0 ? (
               <div className="empty-state">
                 <span style={{ fontSize: 40 }}>❤️</span>
-                <p>No favourites yet</p>
+                <p>{isSignedIn ? 'No favourites yet' : 'Sign in to save favourites'}</p>
               </div>
             ) : (
               <div className="restaurant-list">
@@ -276,65 +311,33 @@ export default function HomeScreen({ onSelectRestaurant, onGoProfile, orders = [
         })}
       </nav>
 
-      {selectedOrder && (
-        <OrderDetailOverlay order={selectedOrder} onClose={() => setSelectedOrder(null)} />
-      )}
     </div>
   )
 }
 
-function OrderDetailOverlay({ order, onClose }) {
-  const restaurant = RESTAURANTS.find(r => r.id === order.restaurantId)
-  const steps = ['Confirmed', 'Preparing', 'Picked Up', 'On the Way', 'Delivered']
-  const currentStepIndex = order.status === 'Delivered' ? steps.length - 1 : 3
-
+function RestaurantSkeletons({ count = 3 }) {
   return (
-    <div className="order-detail-overlay">
-      <div className="order-detail-header">
-        <button className="order-detail-back" onClick={onClose}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="#333" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-        </button>
-        <span className="order-detail-title">Order Details</span>
-      </div>
-
-      <div className="order-detail-content">
-        <div className="order-detail-restaurant">
-          <span className="order-detail-emoji">{restaurant?.emoji || '🍽️'}</span>
-          <div>
-            <div className="order-detail-name">{restaurant?.name || 'Restaurant'}</div>
-            <div className="order-detail-address">{restaurant?.address}</div>
+    <>
+      {Array.from({ length: count }, (_, i) => (
+        <div className="restaurant-card skeleton" key={i} aria-hidden="true">
+          <div className="restaurant-img skeleton-block" />
+          <div className="restaurant-info">
+            <div className="skeleton-line wide" />
+            <div className="skeleton-line" />
+            <div className="skeleton-line narrow" />
           </div>
         </div>
+      ))}
+    </>
+  )
+}
 
-        <div className="order-detail-meta-card">
-          <div className="order-detail-meta-row">
-            <span>Order ID</span>
-            <span>#{order.id}</span>
-          </div>
-          <div className="order-detail-meta-row">
-            <span>Date</span>
-            <span>{order.date}</span>
-          </div>
-          <div className="order-detail-meta-row">
-            <span>Amount Paid</span>
-            <span>₹{order.total}</span>
-          </div>
-          <div className="order-detail-meta-row">
-            <span>Status</span>
-            <span className={`order-status-pill ${order.status === 'Delivered' ? 'delivered' : 'active'}`}>{order.status}</span>
-          </div>
-        </div>
-
-        <div className="order-detail-section-title">Order Status</div>
-        <div className="order-detail-timeline">
-          {steps.map((step, idx) => (
-            <div className="order-detail-step" key={step}>
-              <span className={`order-detail-dot ${idx <= currentStepIndex ? 'done' : ''}`} />
-              <span className={`order-detail-step-label ${idx <= currentStepIndex ? 'done' : ''}`}>{step}</span>
-            </div>
-          ))}
-        </div>
-      </div>
+function LoadFailed({ message, onRetry }) {
+  return (
+    <div className="empty-state">
+      <span style={{ fontSize: 40 }}>📶</span>
+      <p>{message || 'Could not load restaurants'}</p>
+      <button className="retry-btn" onClick={onRetry}>Try again</button>
     </div>
   )
 }

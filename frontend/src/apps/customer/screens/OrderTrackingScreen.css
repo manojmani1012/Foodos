@@ -191,3 +191,85 @@
   cursor: pointer;
   box-shadow: 0 6px 18px rgba(26,92,53,0.3);
 }
+
+/* Real order states: cancellation, the bill, and the expected time. */
+.track-cancelled {
+  padding: 26px 16px;
+  border-radius: 12px;
+  background: #fdecea;
+  color: #a4281f;
+  text-align: center;
+}
+
+.track-cancelled p { margin: 8px 0 0; font-weight: 600; }
+.track-cancelled small { display: block; margin-top: 4px; color: #8d4a44; }
+
+.track-eta {
+  margin-top: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: #e8f5e9;
+  color: #1a5c35;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.track-bill {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #e6ebe7;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.track-bill-title {
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #888;
+}
+
+.track-bill-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: 13.5px;
+  color: #444;
+}
+
+.track-bill-row.total {
+  margin-top: 6px;
+  padding-top: 9px;
+  border-top: 1px solid #e6ebe7;
+  font-weight: 700;
+  color: #111;
+}
+
+.track-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fdecea;
+  color: #a4281f;
+  font-size: 13px;
+  text-align: center;
+}
+
+.track-cancel-btn {
+  width: 100%;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #e0b4b0;
+  border-radius: 12px;
+  background: #fff;
+  color: #a4281f;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.track-cancel-btn:disabled { opacity: 0.6; cursor: not-allowed; }

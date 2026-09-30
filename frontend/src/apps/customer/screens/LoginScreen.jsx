@@ -1,14 +1,75 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import './LoginScreen.css'
 import FoodosLogo from '../../../components/FoodosLogo'
+import { useAuth } from '../../../lib/AuthContext'
 
 export default function LoginScreen({ onLogin }) {
+  const { requestOtp, verifyOtp } = useAuth()
   const [phone, setPhone] = useState('')
   const [step, setStep] = useState('phone') // 'phone' | 'otp'
   const [otp, setOtp] = useState(['', '', '', ''])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [devCode, setDevCode] = useState('')
+  const [resendIn, setResendIn] = useState(0)
+  // Guards against a second submit while the first is still in flight.
+  const submitting = useRef(false)
+
+  useEffect(() => {
+    if (resendIn <= 0) return undefined
+
+    const timer = setTimeout(() => setResendIn(seconds => seconds - 1), 1000)
+
+    return () => clearTimeout(timer)
+  }, [resendIn])
+
+  async function sendCode() {
+    if (phone.length < 10 || busy) return
+
+    setBusy(true)
+    setError('')
+
+    try {
+      const result = await requestOtp(phone)
+
+      setStep('otp')
+      setOtp(['', '', '', ''])
+      setResendIn(30)
+      // Present only while the backend runs without an SMS gateway.
+      setDevCode(result.devCode || '')
+    } catch (requestError) {
+      setError(requestError.message)
+
+      if (requestError.details?.retryAfterSeconds) {
+        setResendIn(requestError.details.retryAfterSeconds)
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function submitCode(code) {
+    if (submitting.current) return
+
+    submitting.current = true
+    setBusy(true)
+    setError('')
+
+    try {
+      await verifyOtp(phone, code)
+      onLogin()
+    } catch (verifyError) {
+      setError(verifyError.message)
+      setOtp(['', '', '', ''])
+      document.getElementById('otp-0')?.focus()
+    } finally {
+      submitting.current = false
+      setBusy(false)
+    }
+  }
 
   function handleContinue() {
-    if (phone.length >= 10) setStep('otp')
+    sendCode()
   }
 
   function handleOtpChange(i, val) {
@@ -16,11 +77,12 @@ export default function LoginScreen({ onLogin }) {
     const next = [...otp]
     next[i] = val
     setOtp(next)
+    setError('')
     if (val && i < 3) {
       document.getElementById(`otp-${i + 1}`)?.focus()
     }
     if (next.every(d => d !== '')) {
-      setTimeout(onLogin, 400)
+      submitCode(next.join(''))
     }
   }
 
@@ -56,12 +118,14 @@ export default function LoginScreen({ onLogin }) {
               />
             </div>
 
+            {error && <p className="login-error">{error}</p>}
+
             <button
-              className={`btn-primary ${phone.length >= 10 ? 'active' : ''}`}
+              className={`btn-primary ${phone.length >= 10 && !busy ? 'active' : ''}`}
               onClick={handleContinue}
-              disabled={phone.length < 10}
+              disabled={phone.length < 10 || busy}
             >
-              Continue
+              {busy ? 'Sending…' : 'Continue'}
             </button>
 
             <div className="divider">
@@ -70,27 +134,24 @@ export default function LoginScreen({ onLogin }) {
               <span className="divider-line" />
             </div>
 
+            {/* Social sign-in is not connected yet; the backend has no provider
+                configured, so these stay disabled rather than faking a login. */}
             <div className="social-buttons">
-              <button className="social-btn" onClick={onLogin}>
+              <button className="social-btn" disabled title="Coming soon">
                 <GoogleIcon /> Google
               </button>
-              <button className="social-btn" onClick={onLogin}>
+              <button className="social-btn" disabled title="Coming soon">
                 <AppleIcon /> Apple
               </button>
-              <button className="social-btn facebook" onClick={onLogin}>
+              <button className="social-btn facebook" disabled title="Coming soon">
                 <FacebookIcon />
               </button>
             </div>
 
             <p className="terms-text">
               By continuing, you agree to our{' '}
-              <span className="link">Terms & Conditions</span> and{' '}
+              <span className="link">Terms &amp; Conditions</span> and{' '}
               <span className="link">Privacy Policy</span>
-            </p>
-
-            <p className="signup-text">
-              Already have an account?{' '}
-              <span className="link" onClick={onLogin}>Login</span>
             </p>
           </>
         ) : (
@@ -115,14 +176,29 @@ export default function LoginScreen({ onLogin }) {
               ))}
             </div>
 
-            <p className="resend-text">Didn't receive? <span className="link">Resend OTP</span></p>
+            {devCode && (
+              <p className="login-dev-code">
+                Development code: <strong>{devCode}</strong>
+              </p>
+            )}
+
+            {error && <p className="login-error">{error}</p>}
+
+            <p className="resend-text">
+              Didn&apos;t receive?{' '}
+              {resendIn > 0 ? (
+                <span className="resend-wait">Resend in {resendIn}s</span>
+              ) : (
+                <span className="link" onClick={sendCode}>Resend OTP</span>
+              )}
+            </p>
 
             <button
-              className={`btn-primary ${otp.every(d => d) ? 'active' : ''}`}
-              onClick={onLogin}
-              disabled={!otp.every(d => d)}
+              className={`btn-primary ${otp.every(d => d) && !busy ? 'active' : ''}`}
+              onClick={() => submitCode(otp.join(''))}
+              disabled={!otp.every(d => d) || busy}
             >
-              Verify & Continue
+              {busy ? 'Verifying…' : 'Verify & Continue'}
             </button>
           </>
         )}

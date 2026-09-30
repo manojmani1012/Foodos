@@ -1,32 +1,37 @@
 import React, { useState } from 'react'
 import './CartScreen.css'
-import { getItem, ADD_ONS, getRestaurant } from '../../../data/menuData'
+import { quoteCart } from '../../../lib/orders.js'
+import { useAsync } from '../../../lib/useAsync.js'
 
-const DELIVERY_FEE = 20
-const PACKAGING_FEE = 10
-
-export default function CartScreen({ cart, restaurantId, onBack, onUpdateQty, onPlaceOrder }) {
+// Totals come from the server. The cart sends what was chosen and the API
+// returns the bill, so the figure shown here is the figure that gets charged.
+export default function CartScreen({ cart, restaurant, onBack, onUpdateQty, onPlaceOrder }) {
   const [coupon, setCoupon] = useState('')
-  const [appliedCoupon, setAppliedCoupon] = useState(null)
-  const restaurant = getRestaurant(restaurantId)
+  const [submittedCoupon, setSubmittedCoupon] = useState('')
 
+  const quoteQuery = useAsync(
+    () => (cart.length ? quoteCart(cart, submittedCoupon) : Promise.resolve(null)),
+    [cart, submittedCoupon],
+  )
+
+  const quote = quoteQuery.data
+  const couponState = quote?.coupon
+
+  // Each line still shows its own subtotal from the snapshot taken when it was
+  // added; only the bill below is authoritative.
   const lines = cart.map((c, idx) => {
-    const item = getItem(c.itemId)
-    const addOnTotal = (c.addOns || []).reduce((sum, id) => {
-      const a = ADD_ONS.find(x => x.id === id)
-      return sum + (a ? a.price : 0)
-    }, 0)
-    return { ...c, index: idx, item, addOnTotal, lineTotal: (item.price + addOnTotal) * c.qty }
+    const addOnTotal = (c.addOns || []).reduce((sum, a) => sum + a.price, 0)
+
+    return { ...c, index: idx, addOnTotal, lineTotal: (c.item.price + addOnTotal) * c.qty }
   })
 
-  const itemTotal = lines.reduce((sum, l) => sum + l.lineTotal, 0)
-  const discount = appliedCoupon === 'FOODNEW' ? Math.min(100, Math.round(itemTotal * 0.5)) : 0
-  const toPay = Math.max(0, itemTotal + DELIVERY_FEE + PACKAGING_FEE - discount)
-
   function applyCoupon() {
-    if (coupon.trim().toUpperCase() === 'FOODNEW') {
-      setAppliedCoupon('FOODNEW')
-    }
+    setSubmittedCoupon(coupon.trim().toUpperCase())
+  }
+
+  function clearCoupon() {
+    setCoupon('')
+    setSubmittedCoupon('')
   }
 
   return (
@@ -57,7 +62,7 @@ export default function CartScreen({ cart, restaurantId, onBack, onUpdateQty, on
                 <div className="cart-line-name">{line.item.name}</div>
                 {line.addOns?.length > 0 && (
                   <div className="cart-line-addons">
-                    {line.addOns.map(id => ADD_ONS.find(a => a.id === id)?.label).join(', ')}
+                    {line.addOns.map(a => a.label).join(', ')}
                   </div>
                 )}
                 <div className="cart-line-price">₹{line.lineTotal}</div>
@@ -82,42 +87,65 @@ export default function CartScreen({ cart, restaurantId, onBack, onUpdateQty, on
               />
               <button className="cart-coupon-btn" onClick={applyCoupon}>Apply</button>
             </div>
-            {appliedCoupon && (
-              <div className="cart-coupon-applied">✓ {appliedCoupon} applied — you saved ₹{discount}</div>
+            {couponState?.applied && (
+              <div className="cart-coupon-applied">
+                ✓ {couponState.code} applied — you saved ₹{quote.discount}
+                <button className="cart-coupon-remove" onClick={clearCoupon}>Remove</button>
+              </div>
+            )}
+            {couponState && !couponState.applied && couponState.reason && (
+              <div className="cart-coupon-error">{couponState.reason}</div>
             )}
 
-            <div className="cart-bill">
-              <div className="cart-bill-row">
-                <span>Item Total</span>
-                <span>₹{itemTotal}</span>
+            {quoteQuery.error ? (
+              <div className="cart-bill-error">
+                {quoteQuery.error.message}
+                <button className="retry-btn" onClick={quoteQuery.reload}>Try again</button>
               </div>
-              <div className="cart-bill-row">
-                <span>Delivery Fee</span>
-                <span>₹{DELIVERY_FEE}</span>
-              </div>
-              <div className="cart-bill-row">
-                <span>Packaging Fee</span>
-                <span>₹{PACKAGING_FEE}</span>
-              </div>
-              {discount > 0 && (
-                <div className="cart-bill-row discount">
-                  <span>Coupon Discount</span>
-                  <span>−₹{discount}</span>
+            ) : (
+              <div className={`cart-bill ${quoteQuery.loading ? 'updating' : ''}`}>
+                <div className="cart-bill-row">
+                  <span>Item Total</span>
+                  <span>{quote ? `₹${quote.subtotal}` : '…'}</span>
                 </div>
-              )}
-              <div className="cart-bill-row total">
-                <span>To Pay</span>
-                <span>₹{toPay}</span>
+                <div className="cart-bill-row">
+                  <span>Delivery Fee</span>
+                  <span>₹{quote ? quote.deliveryFee : '—'}</span>
+                </div>
+                <div className="cart-bill-row">
+                  <span>Packaging Fee</span>
+                  <span>₹{quote ? quote.packagingFee : '—'}</span>
+                </div>
+                {quote?.tax > 0 && (
+                  <div className="cart-bill-row">
+                    <span>GST</span>
+                    <span>₹{quote.tax}</span>
+                  </div>
+                )}
+                {quote?.discount > 0 && (
+                  <div className="cart-bill-row discount">
+                    <span>Coupon Discount</span>
+                    <span>−₹{quote.discount}</span>
+                  </div>
+                )}
+                <div className="cart-bill-row total">
+                  <span>To Pay</span>
+                  <span>{quote ? `₹${quote.total}` : '…'}</span>
+                </div>
               </div>
-            </div>
+            )}
           </>
         )}
         <div style={{ height: lines.length > 0 ? 90 : 0 }} />
       </div>
 
       {lines.length > 0 && (
-        <button className="cart-place-order" onClick={() => onPlaceOrder(toPay)}>
-          Place Order · ₹{toPay}
+        <button
+          className="cart-place-order"
+          onClick={() => onPlaceOrder({ total: quote.total, couponCode: couponState?.applied ? couponState.code : null })}
+          disabled={!quote || quoteQuery.loading}
+        >
+          {quoteQuery.loading ? 'Updating…' : `Place Order · ₹${quote ? quote.total : ''}`}
         </button>
       )}
     </div>

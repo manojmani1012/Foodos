@@ -222,3 +222,41 @@
   color: #888;
   margin-bottom: 24px;
 }
+
+/* Real API states: errors, the resend countdown, and the development code
+   shown while the backend has no SMS gateway. */
+.login-error {
+  margin: 10px 0 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: #fdecea;
+  color: #a4281f;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.login-dev-code {
+  margin: 4px 0 0;
+  padding: 8px 12px;
+  border: 1px dashed #a9bbae;
+  border-radius: 8px;
+  background: #f1f8f2;
+  color: #1a5c35;
+  font-size: 13px;
+  text-align: center;
+}
+
+.login-dev-code strong {
+  font-size: 16px;
+  letter-spacing: 3px;
+}
+
+.resend-wait {
+  color: #888;
+}
+
+.social-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

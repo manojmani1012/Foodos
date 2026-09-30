@@ -1,25 +1,77 @@
 import React, { useEffect, useState } from 'react'
 import './OrderTrackingScreen.css'
-import { getRestaurant } from '../../../data/menuData'
+import { cancelOrder, fetchOrder } from '../../../lib/orders.js'
 
+// The tracking timeline, in the order the app shows it. The API returns the
+// statuses that have actually happened; anything further down is still ahead.
 const STEPS = [
-  { key: 'confirmed', label: 'Order Confirmed', time: '12:34 PM' },
-  { key: 'preparing', label: 'Preparing Your Food', time: '12:40 PM' },
-  { key: 'pickup', label: 'Picked Up', time: '01:00 PM' },
-  { key: 'on-the-way', label: 'On the Way', time: '01:05 PM' },
-  { key: 'delivered', label: 'Delivered', time: '—' },
+  { key: 'confirmed', label: 'Order Confirmed' },
+  { key: 'preparing', label: 'Preparing Your Food' },
+  { key: 'ready', label: 'Ready for Pickup' },
+  { key: 'picked_up', label: 'Picked Up' },
+  { key: 'on_the_way', label: 'On the Way' },
+  { key: 'delivered', label: 'Delivered' },
 ]
 
-export default function OrderTrackingScreen({ restaurantId, onBack, onDone }) {
-  const restaurant = getRestaurant(restaurantId)
-  const [stepIndex, setStepIndex] = useState(0)
+// Until the restaurant and delivery apps push updates, the status only changes
+// when someone else moves it, so a slow poll is enough. This becomes a WebSocket
+// subscription when realtime arrives.
+const POLL_INTERVAL_MS = 15000
 
-  // Simulate order progressing through statuses over time.
+const CANCELLABLE = new Set(['pending', 'confirmed'])
+
+function formatTime(iso) {
+  if (!iso) return ''
+
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+export default function OrderTrackingScreen({ order: initialOrder, onBack, onDone }) {
+  const [order, setOrder] = useState(initialOrder)
+  const [cancelling, setCancelling] = useState(false)
+  const [error, setError] = useState('')
+
+  const finished = order?.status === 'delivered' || order?.status === 'cancelled'
+
   useEffect(() => {
-    if (stepIndex >= STEPS.length - 1) return
-    const t = setTimeout(() => setStepIndex(i => i + 1), 2500)
-    return () => clearTimeout(t)
-  }, [stepIndex])
+    if (!order?.id || finished) return undefined
+
+    let cancelled = false
+
+    const timer = setInterval(async () => {
+      try {
+        const latest = await fetchOrder(order.id)
+
+        if (!cancelled) setOrder(latest)
+      } catch {
+        // A failed poll is not worth interrupting the screen for; the next one
+        // will try again.
+      }
+    }, POLL_INTERVAL_MS)
+
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [order?.id, finished])
+
+  if (!order) return null
+
+  const reached = new Map(order.timeline.map(step => [step.status, step.at]))
+  const currentIndex = STEPS.reduce((last, step, idx) => (reached.has(step.key) ? idx : last), -1)
+
+  async function handleCancel() {
+    setCancelling(true)
+    setError('')
+
+    try {
+      setOrder(await cancelOrder(order.id, 'Changed my mind'))
+    } catch (cancelError) {
+      setError(cancelError.message)
+    } finally {
+      setCancelling(false)
+    }
+  }
 
   return (
     <div className="track-screen">
@@ -32,52 +84,75 @@ export default function OrderTrackingScreen({ restaurantId, onBack, onDone }) {
       </div>
 
       <div className="track-content">
-        <div className="track-order-id">Order ID: #FD125487</div>
+        <div className="track-order-id">Order ID: #{order.orderNumber}</div>
 
-        <div className="track-timeline">
-          {STEPS.map((step, idx) => {
-            const done = idx <= stepIndex
-            return (
-              <div className="track-step" key={step.key}>
-                <div className="track-step-marker">
-                  <span className={`track-dot ${done ? 'done' : ''}`} />
-                  {idx < STEPS.length - 1 && <span className={`track-line ${idx < stepIndex ? 'done' : ''}`} />}
+        {order.status === 'cancelled' ? (
+          <div className="track-cancelled">
+            <span style={{ fontSize: 34 }}>🚫</span>
+            <p>This order was cancelled.</p>
+            {order.cancellationReason && <small>{order.cancellationReason}</small>}
+          </div>
+        ) : (
+          <div className="track-timeline">
+            {STEPS.map((step, idx) => {
+              const done = idx <= currentIndex
+              return (
+                <div className="track-step" key={step.key}>
+                  <div className="track-step-marker">
+                    <span className={`track-dot ${done ? 'done' : ''}`} />
+                    {idx < STEPS.length - 1 && <span className={`track-line ${idx < currentIndex ? 'done' : ''}`} />}
+                  </div>
+                  <div className="track-step-info">
+                    <div className={`track-step-label ${done ? 'done' : ''}`}>{step.label}</div>
+                    {done && <div className="track-step-time">{formatTime(reached.get(step.key))}</div>}
+                  </div>
                 </div>
-                <div className="track-step-info">
-                  <div className={`track-step-label ${done ? 'done' : ''}`}>{step.label}</div>
-                  {done && <div className="track-step-time">{step.time}</div>}
-                </div>
-              </div>
-            )
-          })}
-        </div>
+              )
+            })}
+          </div>
+        )}
+
+        {order.estimatedDeliveryAt && !finished && (
+          <div className="track-eta">Expected by {formatTime(order.estimatedDeliveryAt)}</div>
+        )}
 
         <div className="track-map-placeholder">
           <span style={{ fontSize: 36 }}>🗺️</span>
           <p>Live map tracking</p>
         </div>
 
-        {stepIndex >= 2 && (
-          <div className="track-rider-card">
-            <div className="track-rider-avatar">🛵</div>
-            <div className="track-rider-info">
-              <div className="track-rider-name">Suresh Kumar</div>
-              <div className="track-rider-rating">⭐ 4.8 · Delivery Partner</div>
+        <div className="track-bill">
+          <div className="track-bill-title">{order.items.length} item{order.items.length === 1 ? '' : 's'}</div>
+          {order.items.map(item => (
+            <div className="track-bill-row" key={item.id}>
+              <span>{item.quantity} × {item.name}</span>
+              <span>₹{item.lineTotal}</span>
             </div>
-            <button className="track-rider-call" onClick={() => { window.location.href = 'tel:+919876543210' }}>📞</button>
+          ))}
+          <div className="track-bill-row total">
+            <span>Total ({order.paymentMethod === 'cod' ? 'Cash on delivery' : order.paymentMethod.toUpperCase()})</span>
+            <span>₹{order.total}</span>
+          </div>
+        </div>
+
+        {order.restaurant && (
+          <div className="track-restaurant-line">
+            From <strong>{order.restaurant.name}</strong>
           </div>
         )}
 
-        {restaurant && (
-          <div className="track-restaurant-line">
-            From <strong>{restaurant.name}</strong>
-          </div>
+        {error && <div className="track-error">{error}</div>}
+
+        {CANCELLABLE.has(order.status) && (
+          <button className="track-cancel-btn" onClick={handleCancel} disabled={cancelling}>
+            {cancelling ? 'Cancelling…' : 'Cancel order'}
+          </button>
         )}
       </div>
 
-      {stepIndex >= STEPS.length - 1 && (
+      {finished && (
         <button className="track-done-btn" onClick={onDone}>
-          Order Delivered — Back to Home
+          {order.status === 'delivered' ? 'Order Delivered — Back to Home' : 'Back to Home'}
         </button>
       )}
     </div>
