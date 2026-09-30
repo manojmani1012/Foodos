@@ -1,0 +1,1 @@
+"""Foodos backend application package."""
