@@ -42,7 +42,16 @@ for ($i = 0; $i -lt 20; $i++) {
 
 if ($ready) {
     Write-Host "Frontend started (PID $($proc.Id))."
-    Write-Host "Open: http://localhost:$Port"
+    Write-Host "On this PC:   http://localhost:$Port"
+
+    # Same-Wi-Fi address, for opening the prototype on a phone.
+    $lanIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.PrefixOrigin -in 'Dhcp', 'Manual' -and $_.IPAddress -notlike '169.254.*' -and $_.InterfaceAlias -notlike '*Loopback*' } |
+        Select-Object -First 1).IPAddress
+
+    if ($lanIp) {
+        Write-Host "On your phone: http://${lanIp}:$Port  (same Wi-Fi)"
+    }
 } else {
     Write-Host 'Frontend did not respond in time. Last 20 log lines:'
     Get-Content $LogFile -Tail 20

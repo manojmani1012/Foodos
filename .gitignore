@@ -19,3 +19,6 @@ venv/
 
 # Logs
 *.log
+
+# Runtime files written by the start scripts
+.frontend.pid
