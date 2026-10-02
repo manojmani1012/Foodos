@@ -25,6 +25,16 @@ DEFAULT_DELIVERY_FEE_PAISE = 2000
 # Riding time added on top of the kitchen's own preparation estimate.
 RIDE_ALLOWANCE_MINUTES = 10
 
+# How close a word has to be to count as a match. 0.3 is pg_trgm's own
+# default: it accepts briyani/biryani and piza/pizza while scoring
+# genuinely unrelated words at zero.
+SEARCH_SIMILARITY = 0.3
+
+# A dish match counts for less than a name match. Searching "biryani" should put
+# "Biryani House" above a place that merely has biryani on the menu, even when
+# that place is better rated - the name is the stronger signal of what was meant.
+DISH_MATCH_WEIGHT = 0.6
+
 
 def _to_summary(row: Any, favourite_ids: set[uuid.UUID]) -> RestaurantSummary:
     prep = row["avg_prep_minutes"]
@@ -76,14 +86,49 @@ async def list_restaurants(
     if city:
         conditions.append(f"r.city ilike {placeholder(city)}")
 
+    relevance = None
+
     if search:
-        # Matches the restaurant name or any of its cuisines, so "biryani" finds
-        # both "The Biryani House" and anywhere serving biryani.
-        term = placeholder(f"%{search}%")
+        # Matches the restaurant name, its cuisines, or anything on its menu, so
+        # "biryani" finds both "The Biryani House" and anywhere serving a
+        # biryani dish.
+        #
+        # Spelling varies — briyani/biryani, panner/paneer — so plain substring
+        # matching is paired with trigram similarity.
+        #
+        # strict_word_similarity, not word_similarity: the loose version matches
+        # on a shared prefix alone, which scored "dosa" against "Double Cheese
+        # Burger" at 0.40 and put a burger shop in the dosa results. The strict
+        # version aligns to word boundaries, dropping that pair to 0.20 while
+        # "briyani" against "The Biryani House" still scores 0.33.
+        like = placeholder(f"%{search}%")
+        term = placeholder(search)
+
         conditions.append(
-            f"(r.name ilike {term} or exists ("
-            f"  select 1 from unnest(r.cuisines) as c where c ilike {term}"
-            f"))"
+            f"""(
+              r.name ilike {like}
+              or strict_word_similarity({term}, r.name) >= {SEARCH_SIMILARITY}
+              or exists (
+                select 1 from unnest(r.cuisines) as c
+                where c ilike {like} or strict_word_similarity({term}, c) >= {SEARCH_SIMILARITY}
+              )
+              or exists (
+                select 1 from menu_items mi
+                where mi.restaurant_id = r.id and mi.deleted_at is null
+                  and (mi.name ilike {like} or strict_word_similarity({term}, mi.name) >= {SEARCH_SIMILARITY})
+              )
+            )"""
+        )
+
+        # Closest name match first, so an exact restaurant beats somewhere that
+        # merely sells the dish.
+        relevance = (
+            f"greatest("
+            f"  strict_word_similarity({term}, r.name),"
+            f"  {DISH_MATCH_WEIGHT} * coalesce((select max(strict_word_similarity({term}, mi.name))"
+            f"    from menu_items mi"
+            f"    where mi.restaurant_id = r.id and mi.deleted_at is null), 0)"
+            f") desc,"
         )
 
     if cuisine:
@@ -103,7 +148,7 @@ async def list_restaurants(
                r.address_line, r.city, r.avg_prep_minutes, r.is_accepting_orders
         from restaurants r
         where {where}
-        order by r.is_accepting_orders desc, r.rating desc, r.name
+        order by r.is_accepting_orders desc, {relevance or ""} r.rating desc, r.name
         limit ${len(args) + 1} offset ${len(args) + 2}
         """,
         *args,

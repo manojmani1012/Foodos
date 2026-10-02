@@ -348,3 +348,88 @@ class TestOffersAndCuisines:
 
         assert body["cuisines"] == ["Biryani", "Chinese", "Pizza"]
         assert "Sushi" not in body["cuisines"]
+
+
+class TestFuzzySearch:
+    """Spelling varies; the search has to cope."""
+
+    async def setup_catalogue(self):
+        owner = await make_owner()
+        biryani = await make_restaurant(owner, name="The Biryani House", cuisines=["Biryani", "North Indian"])
+        pizza = await make_restaurant(owner, name="Pizza Corner", cuisines=["Pizza", "Italian"])
+
+        return biryani, pizza
+
+    async def test_a_misspelt_search_still_finds_the_restaurant(self, client):
+        await self.setup_catalogue()
+
+        # The spelling a customer actually typed on the phone.
+        body = (await client.get("/api/v1/customer/restaurants?search=briyani")).json()
+
+        assert [r["name"] for r in body["restaurants"]] == ["The Biryani House"]
+
+    async def test_other_common_misspellings(self, client):
+        await self.setup_catalogue()
+
+        for typo, expected in [("piza", "Pizza Corner"), ("biriyani", "The Biryani House")]:
+            body = (await client.get(f"/api/v1/customer/restaurants?search={typo}")).json()
+            names = [r["name"] for r in body["restaurants"]]
+
+            assert expected in names, f"{typo!r} should find {expected!r}, got {names}"
+
+    async def test_finds_a_restaurant_by_a_dish_it_sells(self, client):
+        owner = await make_owner()
+        restaurant = await make_restaurant(owner, name="Anna Kitchen", cuisines=["South Indian"])
+        await make_menu(restaurant, category="Biryani")
+
+        # "Anna Kitchen" says nothing about biryani; only its menu does.
+        body = (await client.get("/api/v1/customer/restaurants?search=biryani")).json()
+
+        assert [r["name"] for r in body["restaurants"]] == ["Anna Kitchen"]
+
+    async def test_an_unrelated_search_still_returns_nothing(self, client):
+        await self.setup_catalogue()
+
+        body = (await client.get("/api/v1/customer/restaurants?search=sushi")).json()
+
+        # Fuzzy matching must not turn into matching everything.
+        assert body["restaurants"] == []
+
+    async def test_the_closest_name_ranks_first(self, client):
+        owner = await make_owner()
+        await make_restaurant(owner, name="Biryani House", cuisines=["Biryani"], rating=3.0)
+        serves_it = await make_restaurant(owner, name="Anna Kitchen", cuisines=["South Indian"], rating=5.0)
+        await make_menu(serves_it, category="Biryani")
+
+        body = (await client.get("/api/v1/customer/restaurants?search=biryani")).json()
+
+        # Named for it beats merely selling it, even on a lower rating.
+        assert body["restaurants"][0]["name"] == "Biryani House"
+
+
+class TestSearchPrecision:
+    async def test_a_short_term_does_not_match_on_a_shared_prefix(self, client):
+        """"dosa" once matched "Double Cheese Burger" on the "do" prefix alone."""
+        owner = await make_owner()
+        burgers = await make_restaurant(owner, name="Burger Hub", cuisines=["Burgers"])
+        await fetchval(
+            """
+            insert into menu_items (restaurant_id, name, price_paise, is_veg)
+            values ($1, 'Double Cheese Burger', 24900, false) returning id
+            """,
+            burgers,
+        )
+        dosas = await make_restaurant(owner, name="Dosa Express", cuisines=["South Indian"])
+        await fetchval(
+            """
+            insert into menu_items (restaurant_id, name, price_paise, is_veg)
+            values ($1, 'Masala Dosa', 12900, true) returning id
+            """,
+            dosas,
+        )
+
+        body = (await client.get("/api/v1/customer/restaurants?search=dosa")).json()
+        names = [r["name"] for r in body["restaurants"]]
+
+        assert "Dosa Express" in names
+        assert "Burger Hub" not in names, "a shared prefix is not a match"
