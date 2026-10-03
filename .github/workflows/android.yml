@@ -1,0 +1,110 @@
+name: Build Android APK
+
+# Builds an installable APK on GitHub's machines, so nobody needs the Android
+# SDK locally. The result is attached to the run as a downloadable artifact.
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'mobile/customer/**'
+      - '.github/workflows/android.yml'
+  # Lets you build on demand from the Actions tab, choosing where the app
+  # should point without editing the file.
+  workflow_dispatch:
+    inputs:
+      apiUrl:
+        description: 'API base URL the APK will call'
+        required: true
+        default: 'https://foodos-api.example.com'
+
+concurrency:
+  # A newer push makes an in-flight build pointless.
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        working-directory: mobile/customer
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: mobile/customer/package-lock.json
+
+      # React Native 0.86 needs JDK 17; newer JDKs are not reliably supported
+      # by the Gradle plugin.
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve the API URL
+        id: api
+        run: |
+          # Manual runs choose the URL; automatic ones use the repository
+          # variable, so the address is never hard-coded in this file.
+          URL="${{ github.event.inputs.apiUrl }}"
+          if [ -z "$URL" ]; then URL="${{ vars.EXPO_PUBLIC_API_URL }}"; fi
+          if [ -z "$URL" ]; then
+            echo "::error::No API URL. Set the EXPO_PUBLIC_API_URL repository variable, or run this workflow manually and supply one."
+            exit 1
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Building against $URL"
+
+      - name: Generate the native project
+        env:
+          EXPO_PUBLIC_API_URL: ${{ steps.api.outputs.url }}
+        run: npx expo prebuild --platform android --clean
+
+      - name: Build the release APK
+        env:
+          EXPO_PUBLIC_API_URL: ${{ steps.api.outputs.url }}
+        run: ./gradlew assembleRelease --no-daemon
+        working-directory: mobile/customer/android
+
+      - name: Name the APK after the commit
+        id: rename
+        run: |
+          NAME="foodos-customer-${GITHUB_SHA::7}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "$NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          ls -lh "$NAME"
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: foodos-customer-apk
+          path: mobile/customer/${{ steps.rename.outputs.name }}
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          {
+            echo "### Foodos customer APK"
+            echo ""
+            echo "- **Commit:** \`${GITHUB_SHA::7}\`"
+            echo "- **API:** ${{ steps.api.outputs.url }}"
+            echo ""
+            echo "Download it from the **Artifacts** section at the bottom of this page."
+            echo ""
+            echo "> Signed with Android's debug key: fine for testing, not for the Play Store."
+          } >> "$GITHUB_STEP_SUMMARY"
