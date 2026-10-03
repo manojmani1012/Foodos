@@ -171,6 +171,61 @@ Order lines store the dish name, price and add-ons as they were at checkout, and
 the delivery address is copied onto the order. A later menu edit, price change or
 deleted address never rewrites an order that already exists.
 
+## Restaurant partner app
+
+Every route is scoped to the restaurant the signed-in owner owns. No endpoint
+takes a restaurant id from the client, so an owner cannot reach another
+restaurant's orders or menu. One owner, one restaurant for now; multi-outlet
+brands need a restaurant id per request, which is a later change.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/v1/restaurant/me` | The owner's restaurant |
+| PATCH | `/api/v1/restaurant/settings` | The accepting-orders toggle |
+| GET | `/api/v1/restaurant/dashboard` | Today's figures and queue counts |
+| GET | `/api/v1/restaurant/orders?queue=new\|preparing\|ready` | The order queues |
+| GET | `/api/v1/restaurant/orders/{id}` | One order with customer and items |
+| POST | `/api/v1/restaurant/orders/{id}/accept` | Start cooking |
+| POST | `/api/v1/restaurant/orders/{id}/reject` | Refuse, with a reason |
+| POST | `/api/v1/restaurant/orders/{id}/ready` | Ready for pickup |
+| GET | `/api/v1/restaurant/menu` | Categories, items and add-ons |
+| POST | `/api/v1/restaurant/menu/categories` | Add a category |
+| POST | `/api/v1/restaurant/menu/items` | Add a dish |
+| PATCH | `/api/v1/restaurant/menu/items/{id}` | Change price, availability, anything |
+| DELETE | `/api/v1/restaurant/menu/items/{id}` | Take a dish off the menu |
+
+### The order lifecycle
+
+```text
+customer places   -> confirmed
+restaurant accepts -> preparing
+restaurant ready   -> ready
+delivery partner   -> picked_up -> on_the_way -> delivered
+```
+
+Each stage is checked: a dish cannot be marked ready before it is accepted, an
+order cannot be accepted twice, and an order the customer already cancelled
+cannot be accepted at all. The row is locked for the transaction, so two taps on
+Accept cannot both succeed. Rejecting cancels the order and records
+`cancelled_by = 'restaurant'`.
+
+The customer's own cancel window closes as soon as the restaurant accepts.
+
+### Revenue
+
+The dashboard counts only delivered orders as revenue. Anything still cooking
+could still be cancelled, so it is reported separately as `inProgressPaise`.
+"Today" is the calendar day, not a rolling 24 hours, so the figure matches what
+the owner counts at closing.
+
+### Menu changes
+
+A dish is never hard-deleted: removal stamps `deleted_at`, so it leaves the menu
+while past orders that reference it still read correctly. Turning availability
+off keeps the dish visible to customers but greyed out, and refuses it at
+checkout. `PATCH` changes only the fields sent, so a price edit leaves the name
+alone.
+
 ## Development data
 
 ```powershell
