@@ -18,6 +18,12 @@ os.environ["OTP_PEPPER"] = "test-otp-pepper"
 os.environ["EXPOSE_OTP_IN_RESPONSE"] = "true"
 os.environ["SMS_PROVIDER"] = "console"
 
+# No test may call the real payment gateway. Payment tests set these themselves
+# and stub the HTTP call.
+os.environ["RAZORPAY_KEY_ID"] = ""
+os.environ["RAZORPAY_KEY_SECRET"] = ""
+os.environ["RAZORPAY_WEBHOOK_SECRET"] = ""
+
 import asyncio  # noqa: E402
 import sys  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -42,9 +48,13 @@ TEST_DB_NAME = "foodos_test"
 # Tables the tests write to, emptied between cases. `cascade` reaches the
 # dependent rows (menu categories, items, add-ons, favourites), so they are not
 # listed individually.
+# payment_webhook_events has no foreign key to any of these, so `cascade` never
+# reaches it and it has to be named explicitly, or one test's events are still
+# there for the next.
 TRUNCATE_SQL = (
     "truncate refresh_tokens, user_roles, delivery_partners, otp_codes, "
-    "restaurants, offers, orders, customer_addresses, users cascade"
+    "restaurants, offers, orders, customer_addresses, payment_webhook_events, "
+    "users cascade"
 )
 
 

@@ -12,12 +12,18 @@ from ..components.auth.dependencies import CurrentUser, optional_authenticate, r
 from ..components.orders import addresses as address_service
 from ..components.orders import service as order_service
 from ..components.orders.pricing import quote_cart
+from ..components.orders import profile as profile_service
+from ..components.payments import service as payment_service
 from ..components.orders.schemas import (
     AddressBody,
+    ConfirmPaymentBody,
     CancelOrderBody,
     PlaceOrderBody,
     QuoteBody,
+    ReviewOrderBody,
+    UpdateProfileBody,
 )
+from ..errors import not_found
 from ..components.restaurants import service
 from ..components.restaurants.schemas import Offer, RestaurantDetail, RestaurantList, RestaurantSummary
 
@@ -170,3 +176,107 @@ async def cancel_order(
     order = await order_service.cancel_order(user.id, order_id, body.reason)
 
     return {"ok": True, "order": order}
+
+
+# --- Profile and account ---------------------------------------------------
+
+
+@router.get("/profile")
+async def get_profile(user: CurrentUser = Depends(customer_only)):
+    return {"ok": True, "profile": await profile_service.get_profile(user.id)}
+
+
+@router.patch("/profile")
+async def update_profile(body: UpdateProfileBody, user: CurrentUser = Depends(customer_only)):
+    return {"ok": True, "profile": await profile_service.update_profile(user.id, body)}
+
+
+@router.delete("/account")
+async def delete_account(user: CurrentUser = Depends(customer_only)):
+    """Required by the app stores. Clears personal details and ends every
+    session, while leaving order records intact for the restaurants."""
+    await profile_service.delete_account(user.id)
+
+    return {"ok": True}
+
+
+# --- Reviews ---------------------------------------------------------------
+
+
+@router.post("/orders/{order_id}/review", status_code=201)
+async def review_order(
+    order_id: str,
+    body: ReviewOrderBody,
+    user: CurrentUser = Depends(customer_only),
+):
+    review = await profile_service.review_order(user.id, order_id, body.rating, body.comment)
+
+    return {"ok": True, "review": review}
+
+
+@router.get("/orders/{order_id}/review")
+async def get_order_review(order_id: str, user: CurrentUser = Depends(customer_only)):
+    return {"ok": True, "review": await profile_service.get_order_review(user.id, order_id)}
+
+
+# --- Payments --------------------------------------------------------------
+
+
+@router.post("/orders/{order_id}/pay")
+async def start_payment(order_id: str, user: CurrentUser = Depends(customer_only)):
+    """Creates the Razorpay order the app opens checkout against.
+
+    Returns the key id, which is public; the secret stays on the server.
+    """
+    import uuid as _uuid
+
+    try:
+        identifier = _uuid.UUID(order_id)
+    except (ValueError, TypeError):
+        raise not_found("order_not_found", "That order could not be found")
+
+    payment = await payment_service.start_payment(user.id, identifier, "upi")
+
+    return {"ok": True, "payment": payment}
+
+
+@router.post("/orders/{order_id}/pay/confirm")
+async def confirm_payment(
+    order_id: str,
+    body: ConfirmPaymentBody,
+    user: CurrentUser = Depends(customer_only),
+):
+    """Verifies Razorpay's signature before marking anything paid.
+
+    The app reporting success is not enough on its own: only a signature made
+    with the key secret proves the payment happened.
+    """
+    import uuid as _uuid
+
+    try:
+        identifier = _uuid.UUID(order_id)
+    except (ValueError, TypeError):
+        raise not_found("order_not_found", "That order could not be found")
+
+    result = await payment_service.confirm_payment(
+        user.id,
+        identifier,
+        body.razorpayOrderId,
+        body.razorpayPaymentId,
+        body.razorpaySignature,
+    )
+
+    return {"ok": True, **result}
+
+
+@router.get("/orders/{order_id}/pay/status")
+async def payment_status(order_id: str, user: CurrentUser = Depends(customer_only)):
+    """Checked when checkout closed before the app could confirm."""
+    import uuid as _uuid
+
+    try:
+        identifier = _uuid.UUID(order_id)
+    except (ValueError, TypeError):
+        raise not_found("order_not_found", "That order could not be found")
+
+    return {"ok": True, **await payment_service.payment_status(user.id, identifier)}

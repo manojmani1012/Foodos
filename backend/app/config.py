@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     sms_provider: str = "console"
     default_country_code: str = "+91"
 
+    # Razorpay. The secret is server-side only and never sent to the app.
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_webhook_secret: str = ""
+
     database_pool_min: int = Field(default=1, ge=1)
     database_pool_max: int = Field(default=10, ge=1)
 

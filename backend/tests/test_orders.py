@@ -350,7 +350,7 @@ class TestPlacingOrders:
 
         assert response.status_code == 401
 
-    async def test_only_cash_on_delivery_for_now(self, client):
+    async def test_online_payment_is_refused_when_no_gateway_is_configured(self, client):
         restaurant = await make_restaurant()
         item = await make_item(restaurant)
         session = await sign_in(client)
@@ -359,6 +359,8 @@ class TestPlacingOrders:
             client, session, [{"menuItemId": str(item), "quantity": 1}], paymentMethod="upi"
         )
 
+        # Better to send someone to cash on delivery than to take an order that
+        # can never be paid for.
         assert response.status_code == 400
         assert response.json()["code"] == "payment_method_unavailable"
 

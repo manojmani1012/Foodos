@@ -46,3 +46,24 @@ class PlaceOrderBody(BaseModel):
 
 class CancelOrderBody(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=300)
+
+
+class UpdateProfileBody(BaseModel):
+    """Every field optional: only what is sent is changed."""
+
+    fullName: Optional[str] = Field(default=None, max_length=120)
+    email: Optional[str] = Field(default=None, max_length=200)
+    avatarUrl: Optional[str] = Field(default=None, max_length=500)
+
+
+class ReviewOrderBody(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: Optional[str] = Field(default=None, max_length=500)
+
+
+class ConfirmPaymentBody(BaseModel):
+    """Exactly what Razorpay's checkout hands back."""
+
+    razorpayOrderId: str = Field(min_length=4, max_length=120)
+    razorpayPaymentId: str = Field(min_length=4, max_length=120)
+    razorpaySignature: str = Field(min_length=16, max_length=256)

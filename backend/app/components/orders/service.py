@@ -194,11 +194,12 @@ async def place_order(
         if existing is not None:
             return await _order_response(existing["id"])
 
-    if payment_method != "cod":
-        # Card, UPI and wallet arrive with the payment provider in the next phase.
+    from ..payments import razorpay as razorpay_client
+
+    if payment_method != "cod" and not razorpay_client.is_configured():
         raise bad_request(
             "payment_method_unavailable",
-            "Only cash on delivery is available at the moment",
+            "Online payment is not available right now. Please choose cash on delivery",
         )
 
     if tip_paise < 0:
@@ -214,6 +215,8 @@ async def place_order(
     total = quote.total_paise + tip_paise
 
     async with transaction() as connection:
+        is_cash = payment_method == "cod"
+
         order_id = await connection.fetchval(
             """
             insert into orders
@@ -221,8 +224,8 @@ async def place_order(
                delivery_fee_paise, packaging_fee_paise, tax_paise, tip_paise,
                discount_paise, total_paise, offer_id, payment_method, payment_status,
                special_instructions, estimated_delivery_at, confirmed_at, idempotency_key)
-            values ($1, $2, $3::jsonb, 'confirmed', $4, $5, $6, $7, $8, $9, $10, $11,
-                    $12, 'pending', $13, $14, now(), $15)
+            values ($1, $2, $3::jsonb, $16, $4, $5, $6, $7, $8, $9, $10, $11,
+                    $12, 'pending', $13, $14, $17, $15)
             returning id
             """,
             user_id,
@@ -240,6 +243,8 @@ async def place_order(
             special_instructions,
             datetime.now(timezone.utc) + timedelta(minutes=45),
             idempotency_key,
+            "confirmed" if is_cash else "pending",
+            datetime.now(timezone.utc) if is_cash else None,
         )
 
         for line in quote.lines:
@@ -282,10 +287,12 @@ async def place_order(
         await connection.execute(
             """
             insert into order_status_history (order_id, status, actor_user_id, note)
-            values ($1, 'confirmed', $2, 'Order placed')
+            values ($1, $3, $2, $4)
             """,
             order_id,
             user_id,
+            "confirmed" if is_cash else "pending",
+            "Order placed" if is_cash else "Awaiting payment",
         )
 
     return await _order_response(order_id)
