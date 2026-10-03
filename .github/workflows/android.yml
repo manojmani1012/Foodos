@@ -25,7 +25,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Compiling the new architecture's C++ for four ABIs is the slow part.
+    timeout-minutes: 60
 
     defaults:
       run:
@@ -49,8 +50,34 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # The runner image already ships an Android SDK whose licences are
+      # accepted. android-actions/setup-android replaced its command-line tools
+      # with a version that then failed to re-accept them, and it installs no
+      # NDK in any case. Using what is already on the machine and adding only
+      # the missing pieces avoids both problems.
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+
+          # Already accepted in the image; this covers anything newly added.
+          # `yes` closes the pipe first, so a non-zero status here means
+          # nothing - a genuinely unaccepted licence fails the install below.
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+
+          # New architecture builds compile C++, so the NDK and CMake are not
+          # optional. These versions are the ones React Native 0.86 pins in
+          # gradle/libs.versions.toml, matching a known-good local build.
+          "$SDKMANAGER" --install \
+            'platform-tools' \
+            'platforms;android-36' \
+            'build-tools;36.0.0' \
+            'ndk;27.1.12297006' \
+            'cmake;3.22.1'
 
       - name: Install dependencies
         run: npm ci
