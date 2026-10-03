@@ -13,9 +13,11 @@ on:
   workflow_dispatch:
     inputs:
       apiUrl:
-        description: 'API base URL the APK will call'
-        required: true
-        default: 'https://foodos-api.example.com'
+        # Blank is the normal case. A pre-filled default would always win over
+        # the repository variable and quietly build against the wrong address.
+        description: 'API base URL (leave blank to use the EXPO_PUBLIC_API_URL variable)'
+        required: false
+        default: ''
 
 concurrency:
   # A newer push makes an in-flight build pointless.
@@ -93,8 +95,21 @@ jobs:
             echo "::error::No API URL. Set the EXPO_PUBLIC_API_URL repository variable, or run this workflow manually and supply one."
             exit 1
           fi
+          # A pasted address often carries a trailing slash, which would make
+          # every request path start with a double slash.
+          URL="${URL%/}"
+
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "Building against $URL"
+
+          # The address is compiled into the APK and cannot be changed
+          # afterwards, so an unreachable one means forty minutes of work for
+          # an app that cannot talk to anything. Better to stop here.
+          if ! curl -fsS -m 25 -o /dev/null "$URL/health"; then
+            echo "::error::$URL/health did not respond. If this is a Cloudflare tunnel, check it is still running on your machine - the address changes every restart. Update the EXPO_PUBLIC_API_URL variable, or type the current address into the box when starting this run."
+            exit 1
+          fi
+          echo "The API answered. Good to build."
 
       - name: Generate the native project
         env:
