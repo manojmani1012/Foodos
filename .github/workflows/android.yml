@@ -87,12 +87,16 @@ jobs:
       - name: Resolve the API URL
         id: api
         run: |
-          # Manual runs choose the URL; automatic ones use the repository
-          # variable, so the address is never hard-coded in this file.
+          # The address is never hard-coded here. A manual run can type one;
+          # otherwise it comes from repository settings. Both tabs are read,
+          # because "variable" and "secret" are an easy pair to mix up and the
+          # difference does not matter for an address that ships inside the
+          # APK anyway.
           URL="${{ github.event.inputs.apiUrl }}"
           if [ -z "$URL" ]; then URL="${{ vars.EXPO_PUBLIC_API_URL }}"; fi
+          if [ -z "$URL" ]; then URL="${{ secrets.EXPO_PUBLIC_API_URL }}"; fi
           if [ -z "$URL" ]; then
-            echo "::error::No API URL. Set the EXPO_PUBLIC_API_URL repository variable, or run this workflow manually and supply one."
+            echo "::error::No API URL. Add EXPO_PUBLIC_API_URL under Settings > Secrets and variables > Actions (either tab), or run this workflow manually and type one in the box."
             exit 1
           fi
           # A pasted address often carries a trailing slash, which would make
@@ -100,6 +104,8 @@ jobs:
           URL="${URL%/}"
 
           echo "url=$URL" >> "$GITHUB_OUTPUT"
+          # Shown as *** if it came from the secrets tab; that is GitHub
+          # masking it, not an empty value.
           echo "Building against $URL"
 
           # The address is compiled into the APK and cannot be changed
