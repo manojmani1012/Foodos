@@ -1,0 +1,49 @@
+# Render blueprint for the Foodos API.
+#
+# The database is not declared here: Neon's free tier keeps data when the
+# service sleeps, which Render's free Postgres does not. Paste Neon's
+# connection string into DATABASE_URL when the service is created.
+
+services:
+  - type: web
+    name: foodos-api
+    runtime: docker
+    plan: free
+    # Closest region to the people testing this.
+    region: singapore
+    branch: dev
+    dockerfilePath: backend/Dockerfile
+    dockerContext: backend
+    # Render restarts the container if this stops answering.
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Makes the settings validator insist on real secrets instead of
+      # falling back to the development placeholders.
+      - key: NODE_ENV
+        value: production
+
+      # Neon's connection string. Set in the dashboard, never in the repo.
+      - key: DATABASE_URL
+        sync: false
+
+      # Generated once by Render and kept across deploys. Rotating either of
+      # these signs everyone out, which is fine on a first deploy.
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: OTP_PEPPER
+        generateValue: true
+
+      # Test keys for now; swap for live keys before taking real money.
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      # Razorpay generates this when the webhook is pointed at this service.
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+
+      # Only the browser frontend needs this; the mobile app does not send
+      # Origin headers and is unaffected.
+      - key: CORS_ORIGINS
+        value: http://localhost:5173
