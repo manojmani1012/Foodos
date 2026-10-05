@@ -1,21 +1,30 @@
 name: Build Android APK
 
-# Builds an installable APK on GitHub's machines, so nobody needs the Android
-# SDK locally. The result is attached to the run as a downloadable artifact.
+# Builds installable APKs on GitHub's machines, so nobody needs the Android
+# SDK locally. Each app's APK is attached to the run as a downloadable artifact.
 on:
   push:
     branches: [main, dev]
     paths:
-      - 'mobile/customer/**'
+      - 'mobile/**'
       - '.github/workflows/android.yml'
-  # Lets you build on demand from the Actions tab, choosing where the app
-  # should point without editing the file.
+  # Lets you build on demand from the Actions tab, choosing which app and where
+  # it should point without editing the file.
   workflow_dispatch:
     inputs:
+      app:
+        description: 'Which app to build'
+        required: false
+        type: choice
+        default: both
+        options:
+          - both
+          - customer
+          - restaurant
       apiUrl:
         # Blank is the normal case. A pre-filled default would always win over
-        # the repository variable and quietly build against the wrong address.
-        description: 'API base URL (leave blank to use the EXPO_PUBLIC_API_URL variable)'
+        # the repository setting and quietly build against the wrong address.
+        description: 'API base URL (blank uses the EXPO_PUBLIC_API_URL variable or secret)'
         required: false
         default: ''
 
@@ -30,9 +39,14 @@ jobs:
     # Compiling the new architecture's C++ for four ABIs is the slow part.
     timeout-minutes: 60
 
-    defaults:
-      run:
-        working-directory: mobile/customer
+    strategy:
+      # One app failing should not cancel the other's build.
+      fail-fast: false
+      matrix:
+        app: >-
+          ${{ fromJSON(github.event.inputs.app == 'customer' && '["customer"]'
+          || github.event.inputs.app == 'restaurant' && '["restaurant"]'
+          || '["customer","restaurant"]') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +56,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: mobile/customer/package-lock.json
+          cache-dependency-path: mobile/${{ matrix.app }}/package-lock.json
 
       # React Native 0.86 needs JDK 17; newer JDKs are not reliably supported
       # by the Gradle plugin.
@@ -83,6 +97,7 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+        working-directory: mobile/${{ matrix.app }}
 
       - name: Resolve the API URL
         id: api
@@ -99,6 +114,7 @@ jobs:
             echo "::error::No API URL. Add EXPO_PUBLIC_API_URL under Settings > Secrets and variables > Actions (either tab), or run this workflow manually and type one in the box."
             exit 1
           fi
+
           # A pasted address often carries a trailing slash, which would make
           # every request path start with a double slash.
           URL="${URL%/}"
@@ -112,7 +128,7 @@ jobs:
           # afterwards, so an unreachable one means forty minutes of work for
           # an app that cannot talk to anything. Better to stop here.
           if ! curl -fsS -m 25 -o /dev/null "$URL/health"; then
-            echo "::error::$URL/health did not respond. If this is a Cloudflare tunnel, check it is still running on your machine - the address changes every restart. Update the EXPO_PUBLIC_API_URL variable, or type the current address into the box when starting this run."
+            echo "::error::$URL/health did not respond. If this is a Cloudflare tunnel, check it is still running on your machine - the address changes every restart. Update the EXPO_PUBLIC_API_URL setting, or type the current address into the box when starting this run."
             exit 1
           fi
           echo "The API answered. Good to build."
@@ -121,38 +137,40 @@ jobs:
         env:
           EXPO_PUBLIC_API_URL: ${{ steps.api.outputs.url }}
         run: npx expo prebuild --platform android --clean
+        working-directory: mobile/${{ matrix.app }}
 
       - name: Build the release APK
         env:
           EXPO_PUBLIC_API_URL: ${{ steps.api.outputs.url }}
         run: ./gradlew assembleRelease --no-daemon
-        working-directory: mobile/customer/android
+        working-directory: mobile/${{ matrix.app }}/android
 
       - name: Name the APK after the commit
         id: rename
         run: |
-          NAME="foodos-customer-${GITHUB_SHA::7}.apk"
+          NAME="foodos-${{ matrix.app }}-${GITHUB_SHA::7}.apk"
           cp android/app/build/outputs/apk/release/app-release.apk "$NAME"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           ls -lh "$NAME"
+        working-directory: mobile/${{ matrix.app }}
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
         with:
-          name: foodos-customer-apk
-          path: mobile/customer/${{ steps.rename.outputs.name }}
+          name: foodos-${{ matrix.app }}-apk
+          path: mobile/${{ matrix.app }}/${{ steps.rename.outputs.name }}
           retention-days: 30
           if-no-files-found: error
 
       - name: Summary
         run: |
           {
-            echo "### Foodos customer APK"
+            echo "### Foodos ${{ matrix.app }} APK"
             echo ""
             echo "- **Commit:** \`${GITHUB_SHA::7}\`"
             echo "- **API:** ${{ steps.api.outputs.url }}"
             echo ""
-            echo "Download it from the **Artifacts** section at the bottom of this page."
+            echo "Download **foodos-${{ matrix.app }}-apk** from the **Artifacts** section at the bottom of this page."
             echo ""
             echo "> Signed with Android's debug key: fine for testing, not for the Play Store."
           } >> "$GITHUB_STEP_SUMMARY"
