@@ -2,6 +2,7 @@ import { Feather } from '@expo/vector-icons'
 import { Redirect, Tabs } from 'expo-router'
 
 import { useAuth } from '@/lib/AuthContext'
+import { NewOrderAlertProvider, useNewOrders } from '@/lib/NewOrderAlert'
 import { colors, type } from '@/theme'
 
 // The four places an owner needs at any time. An order pushes on top of these.
@@ -13,6 +14,16 @@ export default function TabLayout() {
   if (status === 'signed-out') {
     return <Redirect href="/login" />
   }
+
+  return (
+    <NewOrderAlertProvider>
+      <OwnerTabs />
+    </NewOrderAlertProvider>
+  )
+}
+
+function OwnerTabs() {
+  const { newOrders } = useNewOrders()
 
   return (
     <Tabs
@@ -41,6 +52,9 @@ export default function TabLayout() {
         name="orders"
         options={{
           title: 'Orders',
+          // Orders waiting to be accepted, so the count is visible from any tab.
+          tabBarBadge: newOrders > 0 ? newOrders : undefined,
+          tabBarBadgeStyle: { backgroundColor: colors.danger, fontSize: 11 },
           tabBarIcon: ({ color, size }) => (
             <Feather name="clipboard" size={size - 2} color={color} />
           ),

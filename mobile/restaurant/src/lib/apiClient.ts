@@ -114,7 +114,11 @@ async function send(path: string, options: RequestOptions = {}) {
   const { method = 'GET', body, auth = true, accessToken } = options
   const headers: Record<string, string> = { Accept: 'application/json' }
 
-  if (body !== undefined) {
+  // A photo upload goes as multipart form data. Its Content-Type carries a
+  // boundary that fetch generates, so it must not be set by hand here.
+  const isForm = typeof FormData !== 'undefined' && body instanceof FormData
+
+  if (body !== undefined && !isForm) {
     headers['Content-Type'] = 'application/json'
   }
 
@@ -127,7 +131,7 @@ async function send(path: string, options: RequestOptions = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
   })
 
   const parsed = await parseBody(response)

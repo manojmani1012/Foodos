@@ -41,6 +41,17 @@ const EMPTY: Record<Queue, { icon: keyof typeof Feather.glyphMap; title: string;
     title: 'Nothing waiting',
     hint: 'Orders marked ready wait here for the rider.',
   },
+  past: {
+    icon: 'archive',
+    title: 'No past orders yet',
+    hint: 'Delivered and cancelled orders are kept here.',
+  },
+}
+
+const FINISHED: Record<string, { label: string; tone: string; soft: string }> = {
+  delivered: { label: 'Delivered', tone: colors.brandInk, soft: colors.brandSoft },
+  picked_up: { label: 'With rider', tone: '#1565c0', soft: '#e7f0fb' },
+  cancelled: { label: 'Cancelled', tone: colors.danger, soft: colors.dangerSoft },
 }
 
 export default function OrdersScreen() {
@@ -55,7 +66,12 @@ export default function OrdersScreen() {
 
   // The dashboard tiles deep-link into a specific queue.
   useEffect(() => {
-    if (params.queue === 'new' || params.queue === 'preparing' || params.queue === 'ready') {
+    if (
+      params.queue === 'new' ||
+      params.queue === 'preparing' ||
+      params.queue === 'ready' ||
+      params.queue === 'past'
+    ) {
       setQueue(params.queue)
     }
   }, [params.queue])
@@ -158,7 +174,15 @@ export default function OrdersScreen() {
             >
               <View style={styles.cardTop}>
                 <Text style={styles.orderNumber}>#{item.orderNumber}</Text>
-                <Text style={styles.time}>{formatTime(item.placedAt)}</Text>
+                {queue === 'past' && FINISHED[item.status] ? (
+                  <View style={[styles.statusPill, { backgroundColor: FINISHED[item.status].soft }]}>
+                    <Text style={[styles.statusPillText, { color: FINISHED[item.status].tone }]}>
+                      {FINISHED[item.status].label}
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={styles.time}>{formatTime(item.placedAt)}</Text>
+                )}
               </View>
 
               <Text style={styles.customer}>{item.customerName || 'Customer'}</Text>
@@ -233,6 +257,8 @@ const styles = StyleSheet.create({
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   orderNumber: { ...type.bodyStrong, color: colors.ink },
   time: { ...type.caption, color: colors.muted },
+  statusPill: { paddingHorizontal: space.sm, paddingVertical: 2, borderRadius: radius.pill },
+  statusPillText: { ...type.caption, fontWeight: '700' },
   customer: { ...type.small, color: colors.body, marginTop: space.xs },
 
   noteRow: {

@@ -21,6 +21,7 @@ import {
   markOrderReady,
   rejectOrder,
   type OrderDetail,
+  type Refund,
 } from '@/lib/restaurant'
 import { colors, radius, shadow, space, type } from '@/theme'
 
@@ -127,6 +128,8 @@ export default function OrderDetailScreen() {
           ) : null}
         </View>
 
+        {order.refund ? <RefundCard refund={order.refund} /> : null}
+
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Customer</Text>
           <Text style={styles.customerName}>{order.customer.name || 'Customer'}</Text>
@@ -186,10 +189,7 @@ export default function OrderDetailScreen() {
             <Text style={styles.totalValue}>{formatRupees(order.totalPaise)}</Text>
           </View>
 
-          <Text style={styles.payment}>
-            {order.paymentMethod === 'cod' ? 'Cash on delivery' : 'Paid online'} ·{' '}
-            {order.paymentStatus}
-          </Text>
+          <Text style={styles.payment}>{paymentLine(order.paymentMethod, order.paymentStatus)}</Text>
         </View>
 
         {rejecting ? (
@@ -204,7 +204,9 @@ export default function OrderDetailScreen() {
               multiline
             />
             <Text style={styles.reasonHint}>
-              The customer sees this, and is refunded automatically if they have paid.
+              {order.paymentMethod === 'cod'
+                ? 'The customer sees this reason. Cash orders have nothing to refund.'
+                : 'The customer sees this reason. A full refund to their original payment method starts automatically; banks take 5-7 working days.'}
             </Text>
 
             <View style={styles.actionRow}>
@@ -233,10 +235,16 @@ export default function OrderDetailScreen() {
               <Pressable
                 style={[styles.ghostButton, styles.flex]}
                 onPress={() =>
-                  Alert.alert('Reject this order?', 'The customer will be told and refunded.', [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Reject', style: 'destructive', onPress: () => setRejecting(true) },
-                  ])
+                  Alert.alert(
+                    'Reject this order?',
+                    order.paymentMethod === 'cod'
+                      ? 'The customer will be told the order is cancelled.'
+                      : 'The customer will be told, and their online payment is refunded in full.',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: 'Reject', style: 'destructive', onPress: () => setRejecting(true) },
+                    ],
+                  )
                 }
               >
                 <Text style={styles.ghostButtonText}>Reject</Text>
@@ -270,6 +278,52 @@ export default function OrderDetailScreen() {
         </View>
       ) : null}
     </SafeAreaView>
+  )
+}
+
+function paymentLine(method: string, status: string): string {
+  if (method === 'cod') {
+    return status === 'paid' ? 'Cash on delivery · collected' : 'Cash on delivery · collect from customer'
+  }
+
+  return (
+    {
+      paid: 'Paid online',
+      refunded: 'Paid online · refunded',
+      pending: 'Online payment · awaiting payment',
+      failed: 'Online payment · failed',
+    }[status] ?? `Paid online · ${status}`
+  )
+}
+
+// What happened to the customer's money after a cancellation, stated plainly.
+function RefundCard({ refund }: { refund: Refund }) {
+  const failed = refund.status === 'failed'
+
+  return (
+    <View style={[styles.refundCard, failed && styles.refundCardFailed]}>
+      <Feather
+        name={failed ? 'alert-triangle' : refund.status === 'processed' ? 'check-circle' : 'clock'}
+        size={18}
+        color={failed ? colors.danger : colors.brand}
+      />
+      <View style={styles.flex}>
+        <Text style={[styles.refundTitle, failed && styles.refundTitleFailed]}>
+          {failed
+            ? `Refund of ${formatRupees(refund.amountPaise)} could not start`
+            : refund.status === 'processed'
+              ? `${formatRupees(refund.amountPaise)} refunded to the customer`
+              : `Refund of ${formatRupees(refund.amountPaise)} on its way`}
+        </Text>
+        <Text style={styles.refundHint}>
+          {failed
+            ? 'The order is cancelled, but the money has not gone back yet. Please contact Foodos support so the refund is completed.'
+            : refund.status === 'processed'
+              ? 'The bank has the money; it shows in the customer account within a few days.'
+              : 'Back to the original payment method within 5-7 working days.'}
+        </Text>
+      </View>
+    </View>
   )
 }
 
@@ -329,6 +383,20 @@ const styles = StyleSheet.create({
   statusText: { ...type.heading, color: colors.brandInk },
   statusMeta: { ...type.caption, color: colors.body, marginTop: 2 },
   cancelReason: { ...type.small, color: colors.danger, marginTop: space.sm },
+
+  refundCard: {
+    flexDirection: 'row',
+    gap: space.md,
+    padding: space.lg,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.brandSoft,
+  },
+  refundCardFailed: { borderColor: colors.dangerSoft, backgroundColor: colors.dangerSoft },
+  refundTitle: { ...type.bodyStrong, color: colors.brandInk },
+  refundTitleFailed: { color: colors.danger },
+  refundHint: { ...type.caption, color: colors.body, marginTop: 2, lineHeight: 16 },
 
   card: {
     padding: space.lg,

@@ -19,7 +19,10 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "in.foodos.restaurant",
-      "versionCode": 1
+      "versionCode": 1,
+      "permissions": [
+        "VIBRATE"
+      ]
     },
     "web": {
       "output": "static",
@@ -42,6 +45,14 @@
           "android": {
             "usesCleartextTraffic": true
           }
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Foodos Partner uses your photos so you can add pictures of your dishes to your menu.",
+          "cameraPermission": "Foodos Partner uses the camera so you can photograph your dishes for your menu.",
+          "microphonePermission": false
         }
       ]
     ],

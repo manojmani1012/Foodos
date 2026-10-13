@@ -1,4 +1,5 @@
 import { Feather } from '@expo/vector-icons'
+import { Image } from 'expo-image'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useState } from 'react'
 import {
@@ -17,6 +18,7 @@ import {
   deleteMenuItem,
   fetchMenu,
   formatRupees,
+  resolveImageUrl,
   updateMenuItem,
   type MenuCategory,
   type MenuItem,
@@ -121,7 +123,7 @@ export default function MenuScreen() {
           </Text>
         </View>
 
-        <Pressable style={styles.addButton} onPress={() => router.push('/add-item')}>
+        <Pressable style={styles.addButton} onPress={() => router.push('/dish')}>
           <Feather name="plus" size={16} color="#fff" />
           <Text style={styles.addButtonText}>Add</Text>
         </Pressable>
@@ -152,7 +154,7 @@ export default function MenuScreen() {
             <Text style={styles.emptyHint}>
               Add your first dish and customers will be able to order it straight away.
             </Text>
-            <Pressable style={styles.emptyButton} onPress={() => router.push('/add-item')}>
+            <Pressable style={styles.emptyButton} onPress={() => router.push('/dish')}>
               <Text style={styles.emptyButtonText}>Add a dish</Text>
             </Pressable>
           </View>
@@ -172,6 +174,7 @@ export default function MenuScreen() {
                   key={item.id}
                   item={item}
                   busy={pendingId === item.id}
+                  onEdit={() => router.push({ pathname: '/dish', params: { id: item.id } })}
                   onToggle={() => toggleAvailable(item)}
                   onDelete={() => confirmDelete(item)}
                 />
@@ -189,6 +192,7 @@ export default function MenuScreen() {
                 key={item.id}
                 item={item}
                 busy={pendingId === item.id}
+                onEdit={() => router.push({ pathname: '/dish', params: { id: item.id } })}
                 onToggle={() => toggleAvailable(item)}
                 onDelete={() => confirmDelete(item)}
               />
@@ -203,33 +207,54 @@ export default function MenuScreen() {
 function ItemRow({
   item,
   busy,
+  onEdit,
   onToggle,
   onDelete,
 }: {
   item: MenuItem
   busy: boolean
+  onEdit: () => void
   onToggle: () => void
   onDelete: () => void
 }) {
+  const photo = resolveImageUrl(item.imageUrl)
+
   return (
     <View style={[styles.itemCard, !item.isAvailable && styles.itemCardOff]}>
-      <View style={[styles.vegDot, { borderColor: item.isVeg ? colors.veg : colors.nonVeg }]}>
-        <View
-          style={[styles.vegDotInner, { backgroundColor: item.isVeg ? colors.veg : colors.nonVeg }]}
-        />
-      </View>
+      <Pressable style={styles.itemMain} onPress={onEdit}>
+        {photo ? (
+          <Image source={{ uri: photo }} style={styles.thumb} contentFit="cover" transition={150} />
+        ) : (
+          // A dish without a photo says so, because that is something the
+          // owner should fix: it is the biggest single lever on orders.
+          <View style={[styles.thumb, styles.thumbEmpty]}>
+            <Feather name="camera" size={16} color={colors.faint} />
+            <Text style={styles.thumbEmptyText}>Add</Text>
+          </View>
+        )}
 
-      <View style={styles.flex}>
-        <Text style={styles.itemName} numberOfLines={1}>
-          {item.name}
-        </Text>
-        {item.description ? (
-          <Text style={styles.itemDescription} numberOfLines={1}>
-            {item.description}
-          </Text>
-        ) : null}
-        <Text style={styles.itemPrice}>{formatRupees(item.pricePaise)}</Text>
-      </View>
+        <View style={styles.flex}>
+          <View style={styles.nameRow}>
+            <View style={[styles.vegDot, { borderColor: item.isVeg ? colors.veg : colors.nonVeg }]}>
+              <View
+                style={[
+                  styles.vegDotInner,
+                  { backgroundColor: item.isVeg ? colors.veg : colors.nonVeg },
+                ]}
+              />
+            </View>
+            <Text style={styles.itemName} numberOfLines={1}>
+              {item.name}
+            </Text>
+          </View>
+          {item.description ? (
+            <Text style={styles.itemDescription} numberOfLines={1}>
+              {item.description}
+            </Text>
+          ) : null}
+          <Text style={styles.itemPrice}>{formatRupees(item.pricePaise)}</Text>
+        </View>
+      </Pressable>
 
       <View style={styles.itemActions}>
         <Pressable style={styles.iconButton} onPress={onDelete} hitSlop={6}>
@@ -300,6 +325,18 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   itemCardOff: { opacity: 0.6 },
+  itemMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: space.md },
+  thumb: { width: 64, height: 64, borderRadius: radius.sm + 2, backgroundColor: colors.ground },
+  thumbEmpty: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.lineStrong,
+  },
+  thumbEmptyText: { ...type.caption, color: colors.faint },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: space.xs + 2 },
 
   vegDot: {
     width: 14,
@@ -311,7 +348,7 @@ const styles = StyleSheet.create({
   },
   vegDotInner: { width: 6, height: 6, borderRadius: radius.pill },
 
-  itemName: { ...type.bodyStrong, color: colors.ink },
+  itemName: { ...type.bodyStrong, color: colors.ink, flex: 1 },
   itemDescription: { ...type.caption, color: colors.muted, marginTop: 1 },
   itemPrice: { ...type.smallStrong, color: colors.brand, marginTop: space.xs },
 
