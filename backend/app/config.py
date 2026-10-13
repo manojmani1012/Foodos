@@ -2,9 +2,38 @@
 
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Connection-string options that are meant for libpq (psql and friends) but
+# that asyncpg would forward to the server as settings, which Postgres then
+# rejects. Neon puts channel_binding=require in every string it hands out, so
+# leaving this in stops every connection. TLS is unaffected: sslmode stays.
+LIBPQ_ONLY_OPTIONS = {"channel_binding", "gssencmode", "target_session_attrs"}
+
+
+def normalise_database_url(url: str) -> str:
+    if not url:
+        return url
+
+    parts = urlsplit(url)
+
+    # Neon's pooled address runs PgBouncer in transaction mode. The migration
+    # lock (pg_advisory_lock) is held per session, which that mode does not
+    # keep, so two deploys could migrate at once. Refuse it with the fix.
+    if "-pooler." in (parts.hostname or ""):
+        raise ValueError(
+            "DATABASE_URL uses Neon's pooled address (-pooler). Use the direct "
+            "connection string instead: in Neon, turn off 'Connection pooling' "
+            "before copying it."
+        )
+
+    query = [(key, value) for key, value in parse_qsl(parts.query) if key not in LIBPQ_ONLY_OPTIONS]
+
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
 
 DEV_FALLBACKS = {
     "jwt_access_secret": "dev-only-access-secret-do-not-use-in-production",
@@ -20,9 +49,17 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    node_env: Literal["development", "test", "production"] = "development"
+    # staging is a public deployment for testers: real secrets, as strict as
+    # production, except that login codes may be shown on screen while no SMS
+    # provider is connected. production never shows them.
+    node_env: Literal["development", "test", "staging", "production"] = "development"
     port: int = 4000
     database_url: str = ""
+
+    # Every connection's clock. "Today" on the restaurant dashboard and the
+    # day-by-day earnings follow it, so it must be the restaurants' own time
+    # zone, not whatever the database server happens to run (Neon runs UTC).
+    database_timezone: str = "Asia/Kolkata"
 
     # Browsers block cross-origin calls unless the API allows the origin. The Vite
     # dev server runs on 5173, on this machine and over the local network.
@@ -61,6 +98,16 @@ class Settings(BaseSettings):
         return self.node_env == "production"
 
     @property
+    def is_deployed(self) -> bool:
+        """Reachable from the internet: secrets must be real and CORS strict."""
+        return self.node_env in ("staging", "production")
+
+    @field_validator("database_url")
+    @classmethod
+    def _normalise_database_url(cls, value: str) -> str:
+        return normalise_database_url(value)
+
+    @property
     def is_test(self) -> bool:
         return self.node_env == "test"
 
@@ -76,8 +123,8 @@ class Settings(BaseSettings):
             if getattr(self, field):
                 continue
 
-            if self.is_production:
-                raise ValueError(f"{field.upper()} must be set when NODE_ENV=production")
+            if self.is_deployed:
+                raise ValueError(f"{field.upper()} must be set when NODE_ENV={self.node_env}")
 
             object.__setattr__(self, field, fallback)
             print(f"[config] {field.upper()} is not set; using an insecure development default")

@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from ...database import fetch, fetchrow, transaction
 from ...errors import bad_request, conflict, forbidden, not_found
+from ..payments import refunds
 from .pricing import quote_cart
 
 # What the customer may do, and when. The restaurant and delivery apps drive the
@@ -164,6 +165,9 @@ async def _order_response(order_id: uuid.UUID) -> dict:
         "deliveredAt": order["delivered_at"].isoformat() if order["delivered_at"] else None,
         "cancelledAt": order["cancelled_at"].isoformat() if order["cancelled_at"] else None,
         "cancellationReason": order["cancellation_reason"],
+        # Present once a paid order has been cancelled, so the app can say
+        # "refund of Rs X started" rather than leaving the customer guessing.
+        "refund": await refunds.refund_for_order(order_id),
         "timeline": [
             {"status": row["status"], "note": row["note"], "at": row["created_at"].isoformat()}
             for row in history
@@ -407,5 +411,8 @@ async def cancel_order(user_id: uuid.UUID, order_id: str, reason: Optional[str] 
             user_id,
             reason or "Cancelled by customer",
         )
+
+    # After the cancellation has committed, never inside it.
+    await refunds.refund_if_paid(identifier, reason or "Cancelled by customer", user_id)
 
     return await _order_response(identifier)

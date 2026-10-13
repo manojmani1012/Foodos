@@ -28,6 +28,7 @@ async def connect_database() -> Optional[asyncpg.Pool]:
             dsn=settings.database_url,
             min_size=settings.database_pool_min,
             max_size=settings.database_pool_max,
+            server_settings={"timezone": settings.database_timezone},
         )
 
     return _pool

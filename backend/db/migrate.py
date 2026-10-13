@@ -24,16 +24,31 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 MIGRATION_LOCK_ID = 727274
 
 
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def load_migrations() -> list[dict]:
+    """Reads every migration, with a checksum that ignores line endings.
+
+    Git stores these files with LF endings, but a Windows checkout turns them
+    into CRLF. Hashing the raw bytes made the same migration look edited
+    depending on which machine ran it: a database migrated from Windows was
+    refused by the Linux server on Render. Normalising to LF first means one
+    file has one checksum everywhere.
+    """
     migrations = []
 
     for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
-        sql = path.read_text(encoding="utf-8")
+        sql = path.read_text(encoding="utf-8").replace("\r\n", "\n")
         migrations.append(
             {
                 "name": path.name,
                 "sql": sql,
-                "checksum": hashlib.sha256(sql.encode("utf-8")).hexdigest(),
+                "checksum": _sha256(sql),
+                # What older versions of this script stored, from either kind
+                # of checkout. Matching one of these is not an edit.
+                "legacy_checksums": {_sha256(sql.replace("\n", "\r\n"))},
             }
         )
 
@@ -66,6 +81,16 @@ async def migrate(database_url: str) -> int:
             previous = applied.get(migration["name"])
 
             if previous is not None:
+                if previous in migration["legacy_checksums"]:
+                    # Same migration, recorded before checksums ignored line
+                    # endings. Bring the record up to date and move on.
+                    await connection.execute(
+                        "update schema_migrations set checksum = $2 where name = $1",
+                        migration["name"],
+                        migration["checksum"],
+                    )
+                    continue
+
                 if previous != migration["checksum"]:
                     raise RuntimeError(
                         f"{migration['name']} was already applied but has been edited; "

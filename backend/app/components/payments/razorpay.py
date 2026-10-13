@@ -43,6 +43,17 @@ def _auth_header() -> dict[str, str]:
     return {"Authorization": f"Basic {token}"}
 
 
+def _error_detail(response: httpx.Response) -> str:
+    """Razorpay explains a refusal as {"error": {"description": ...}}, but its
+    gateway answers malformed requests with {"message": ...} instead."""
+    try:
+        body = response.json()
+    except Exception:  # noqa: BLE001 - the body may not be JSON
+        return response.text[:200]
+
+    return (body.get("error") or {}).get("description") or body.get("message") or ""
+
+
 async def create_order(amount_paise: int, receipt: str, notes: Optional[dict] = None) -> dict:
     """Creates the Razorpay order the checkout will be opened against.
 
@@ -68,18 +79,43 @@ async def create_order(amount_paise: int, receipt: str, notes: Optional[dict] = 
         response = await client.post(f"{API_BASE}/orders", json=payload, headers=_auth_header())
 
     if response.status_code >= 400:
-        detail = ""
-
-        try:
-            detail = response.json().get("error", {}).get("description", "")
-        except Exception:  # noqa: BLE001 - the body may not be JSON
-            detail = response.text[:200]
+        detail = _error_detail(response)
 
         raise AppError(
             502,
             "payment_gateway_error",
             f"The payment provider refused this order. {detail}".strip(),
         )
+
+    return response.json()
+
+
+async def create_refund(provider_payment_id: str, amount_paise: int, notes: Optional[dict] = None) -> dict:
+    """Asks Razorpay to send money back to the card or UPI account it came from.
+
+    A full refund on a cancelled order. Razorpay replies at once with the
+    refund in `pending` or `processed`; the customer's bank then takes 5-7
+    working days, and Razorpay reports the outcome by webhook.
+    """
+    if not is_configured():
+        raise RazorpayNotConfigured()
+
+    payload: dict[str, Any] = {"amount": amount_paise, "speed": "normal"}
+
+    if notes:
+        payload["notes"] = notes
+
+    async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+        response = await client.post(
+            f"{API_BASE}/payments/{provider_payment_id}/refund",
+            json=payload,
+            headers=_auth_header(),
+        )
+
+    if response.status_code >= 400:
+        detail = _error_detail(response)
+
+        raise AppError(502, "refund_gateway_error", f"The refund could not be started. {detail}".strip())
 
     return response.json()
 

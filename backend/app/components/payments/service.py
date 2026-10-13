@@ -15,6 +15,7 @@ from ...config import get_settings
 from ...database import execute, fetchrow, transaction
 from ...errors import bad_request, conflict, not_found
 from . import razorpay
+from . import refunds
 
 # What the app may ask to pay with. Cash is handled entirely in the order
 # service; everything else goes through Razorpay.
@@ -94,6 +95,8 @@ async def confirm_payment(
         # Either a forgery or a mismatched pair; neither should move an order.
         raise bad_request("payment_signature_invalid", "That payment could not be verified")
 
+    paid_after_cancel = False
+
     async with transaction() as connection:
         order = await connection.fetchrow(
             "select customer_id, payment_status, status from orders where id = $1 for update",
@@ -113,7 +116,7 @@ async def confirm_payment(
             raise not_found("payment_not_found", "That payment could not be found")
 
         # Already settled, by this call or by the webhook arriving first.
-        if order["payment_status"] == "paid":
+        if order["payment_status"] in ("paid", "refunded"):
             return {"paid": True, "orderStatus": order["status"]}
 
         await connection.execute(
@@ -126,26 +129,41 @@ async def confirm_payment(
             razorpay_payment_id,
         )
 
-        # Paid, so the restaurant can finally see it.
-        await connection.execute(
-            """
-            update orders
-            set payment_status = 'paid',
-                status = case when status = 'pending' then 'confirmed' else status end,
-                confirmed_at = coalesce(confirmed_at, now())
-            where id = $1
-            """,
-            order_id,
-        )
+        if order["status"] == "cancelled":
+            # The customer cancelled while the payment was still in flight. The
+            # money has arrived for an order that no longer exists, so it is
+            # recorded as paid and then sent straight back below.
+            await connection.execute(
+                "update orders set payment_status = 'paid' where id = $1", order_id
+            )
+            paid_after_cancel = True
+        else:
+            # Paid, so the restaurant can finally see it.
+            await connection.execute(
+                """
+                update orders
+                set payment_status = 'paid',
+                    status = case when status = 'pending' then 'confirmed' else status end,
+                    confirmed_at = coalesce(confirmed_at, now())
+                where id = $1
+                """,
+                order_id,
+            )
 
-        await connection.execute(
-            """
-            insert into order_status_history (order_id, status, actor_user_id, note)
-            values ($1, 'confirmed', $2, 'Payment received')
-            """,
-            order_id,
-            user_id,
-        )
+            await connection.execute(
+                """
+                insert into order_status_history (order_id, status, actor_user_id, note)
+                values ($1, 'confirmed', $2, 'Payment received')
+                """,
+                order_id,
+                user_id,
+            )
+
+    if paid_after_cancel:
+        # Outside the transaction: the refund calls the gateway.
+        await refunds.refund_if_paid(order_id, "Paid after the order was cancelled", user_id)
+
+        return {"paid": True, "orderStatus": "cancelled"}
 
     return {"paid": True, "orderStatus": "confirmed"}
 
@@ -181,6 +199,17 @@ async def handle_webhook(body: bytes, signature: str) -> dict:
     if stored is None:
         return {"handled": False, "reason": "already processed"}
 
+    if event_type in {"refund.processed", "refund.failed"}:
+        entity = payload.get("payload", {}).get("refund", {}).get("entity") or {}
+        result = await refunds.apply_refund_webhook(event_type, entity)
+
+        await execute(
+            "update payment_webhook_events set processed_at = now() where provider = 'razorpay' and event_id = $1",
+            event_id,
+        )
+
+        return result
+
     if event_type not in {"payment.captured", "order.paid"}:
         return {"handled": False, "reason": f"ignored event {event_type}"}
 
@@ -215,10 +244,13 @@ async def handle_webhook(body: bytes, signature: str) -> dict:
             set payment_status = 'paid',
                 status = case when status = 'pending' then 'confirmed' else status end,
                 confirmed_at = coalesce(confirmed_at, now())
-            where id = $1 and payment_status <> 'paid'
+            where id = $1 and payment_status not in ('paid', 'refunded')
             """,
             payment["order_id"],
         )
+
+    # Same late-capture case as in confirm_payment, reached via the webhook.
+    await refunds.refund_if_paid(payment["order_id"], "Paid after the order was cancelled", None)
 
     await execute(
         "update payment_webhook_events set processed_at = now() where provider = 'razorpay' and event_id = $1",

@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 from ...database import fetch, fetchrow, fetchval, transaction
 from ...errors import bad_request, conflict, not_found
+from ..media import service as media
 
 
 def _item_to_dict(row: Any, addons: Optional[list[dict]] = None) -> dict:
@@ -274,3 +275,113 @@ async def delete_item(restaurant_id: Any, item_id: str) -> None:
 
     if not deleted:
         raise not_found("item_not_found", "That dish is no longer on the menu")
+
+
+async def _owned_item_image(restaurant_id: Any, item_id: str) -> tuple[uuid.UUID, Optional[str]]:
+    identifier = await _as_uuid(item_id, "That dish is no longer on the menu")
+
+    row = await fetchrow(
+        """
+        select image_url from menu_items
+        where id = $1 and restaurant_id = $2 and deleted_at is null
+        """,
+        identifier,
+        restaurant_id,
+    )
+
+    if row is None:
+        raise not_found("item_not_found", "That dish is no longer on the menu")
+
+    return identifier, row["image_url"]
+
+
+async def set_item_image(restaurant_id: Any, owner_id: Any, item_id: str, data: bytes) -> dict:
+    """Stores a new dish photo and points the dish at it, removing the old one."""
+    # Checked before storing, so a request for someone else's dish never
+    # leaves an orphaned image behind.
+    identifier, previous_url = await _owned_item_image(restaurant_id, item_id)
+
+    image_url = await media.store_image(owner_id, data)
+
+    await fetchval(
+        "update menu_items set image_url = $2 where id = $1 returning 1",
+        identifier,
+        image_url,
+    )
+
+    await media.delete_image(previous_url, owner_id)
+
+    return await _item_by_id(identifier)
+
+
+async def clear_item_image(restaurant_id: Any, owner_id: Any, item_id: str) -> dict:
+    identifier, previous_url = await _owned_item_image(restaurant_id, item_id)
+
+    await fetchval(
+        "update menu_items set image_url = null where id = $1 returning 1",
+        identifier,
+    )
+
+    await media.delete_image(previous_url, owner_id)
+
+    return await _item_by_id(identifier)
+
+
+async def _item_by_id(identifier: uuid.UUID) -> dict:
+    row = await fetchrow(
+        """
+        select id, category_id, name, description, price_paise, image_url, is_veg,
+               is_available, rating, rating_count, sort_order
+        from menu_items where id = $1
+        """,
+        identifier,
+    )
+
+    addons = await fetch(
+        """
+        select id, name, price_paise, is_available
+        from menu_item_addons
+        where menu_item_id = $1
+        order by sort_order, name
+        """,
+        identifier,
+    )
+
+    return _item_to_dict(
+        row,
+        [
+            {
+                "id": str(a["id"]),
+                "name": a["name"],
+                "pricePaise": a["price_paise"],
+                "isAvailable": a["is_available"],
+            }
+            for a in addons
+        ],
+    )
+
+
+async def replace_addons(restaurant_id: Any, item_id: str, addons: list) -> dict:
+    """Swaps a dish's add-ons for a new list.
+
+    Safe for past orders: an order keeps its own copy of each add-on's name and
+    price, so changing or removing one here never alters an old bill.
+    """
+    identifier, _ = await _owned_item_image(restaurant_id, item_id)
+
+    async with transaction() as connection:
+        await connection.execute("delete from menu_item_addons where menu_item_id = $1", identifier)
+
+        for index, addon in enumerate(addons):
+            await connection.execute(
+                """
+                insert into menu_item_addons (menu_item_id, name, price_paise, sort_order)
+                values ($1, $2, $3, $4)
+                """,
+                identifier,
+                addon.name.strip(),
+                addon.pricePaise,
+                index,
+            )
+
+    return await _item_by_id(identifier)

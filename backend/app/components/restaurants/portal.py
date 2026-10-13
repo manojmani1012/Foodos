@@ -7,8 +7,12 @@ owner can never read or move another restaurant's orders.
 import uuid
 from typing import Any, Optional
 
+import datetime
+
 from ...database import fetch, fetchrow, transaction
 from ...errors import conflict, forbidden, not_found
+from ..media import service as media
+from ..payments import refunds
 
 # What the restaurant is allowed to do, and from where. The customer places the
 # order (confirmed); the restaurant cooks it (preparing, ready); the delivery
@@ -18,6 +22,8 @@ QUEUES = {
     "new": ["confirmed"],
     "preparing": ["preparing"],
     "ready": ["ready"],
+    # Finished either way: the history an owner looks back through.
+    "past": ["picked_up", "delivered", "cancelled"],
 }
 
 
@@ -269,6 +275,7 @@ async def get_order(restaurant_id: Any, order_id: str) -> dict:
         "placedAt": order["placed_at"].isoformat(),
         "specialInstructions": order["special_instructions"],
         "cancellationReason": order["cancellation_reason"],
+        "refund": await refunds.refund_for_order(identifier),
     }
 
 
@@ -356,7 +363,7 @@ async def accept_order(restaurant_id: Any, order_id: str, user_id: uuid.UUID) ->
 async def reject_order(
     restaurant_id: Any, order_id: str, user_id: uuid.UUID, reason: Optional[str] = None
 ) -> dict:
-    return await _move_order(
+    await _move_order(
         restaurant_id,
         order_id,
         ACCEPTABLE_FROM,
@@ -366,8 +373,202 @@ async def reject_order(
         reason=reason or "Rejected by restaurant",
     )
 
+    # After the cancellation has committed: a slow gateway must not hold the
+    # order locked, and a failed refund must not un-reject the order.
+    await refunds.refund_if_paid(uuid.UUID(order_id), reason or "Rejected by restaurant", user_id)
+
+    return await get_order(restaurant_id, order_id)
+
 
 async def mark_ready(restaurant_id: Any, order_id: str, user_id: uuid.UUID) -> dict:
     return await _move_order(
         restaurant_id, order_id, {"preparing"}, "ready", user_id, "Ready for pickup"
     )
+
+
+RESTAURANT_COLUMNS = """
+    id, name, description, cuisines, address_line, city, phone, image_url,
+    is_veg, rating, rating_count, status, is_accepting_orders,
+    avg_prep_minutes, commission_pct, opens_at, closes_at
+"""
+
+
+def _parse_time(value: Optional[str]) -> Optional[datetime.time]:
+    return datetime.time.fromisoformat(value) if value else None
+
+
+async def update_profile(restaurant_id: Any, changes: dict) -> dict:
+    """Saves only the fields that were sent; an explicit null clears one."""
+    columns = {
+        "description": "description",
+        "phone": "phone",
+        "opensAt": "opens_at",
+        "closesAt": "closes_at",
+        "avgPrepMinutes": "avg_prep_minutes",
+    }
+
+    assignments = []
+    args: list[Any] = [restaurant_id]
+
+    for field, value in changes.items():
+        if field in ("opensAt", "closesAt"):
+            value = _parse_time(value)
+
+        if field == "avgPrepMinutes" and value is None:
+            # Not nullable: every order needs a prep-time estimate.
+            continue
+
+        args.append(value)
+        assignments.append(f"{columns[field]} = ${len(args)}")
+
+    if not assignments:
+        raise conflict("nothing_to_update", "No changes were provided")
+
+    row = await fetchrow(
+        f"update restaurants set {', '.join(assignments)} where id = $1 returning {RESTAURANT_COLUMNS}",
+        *args,
+    )
+
+    return restaurant_to_dict(row)
+
+
+async def set_cover_image(restaurant_id: Any, owner_id: Any, data: Optional[bytes]) -> dict:
+    """Replaces (or, with no data, removes) the restaurant's cover photo."""
+    previous = await fetchrow("select image_url from restaurants where id = $1", restaurant_id)
+    image_url = await media.store_image(owner_id, data) if data is not None else None
+
+    row = await fetchrow(
+        f"update restaurants set image_url = $2 where id = $1 returning {RESTAURANT_COLUMNS}",
+        restaurant_id,
+        image_url,
+    )
+
+    await media.delete_image(previous["image_url"] if previous else None, owner_id)
+
+    return restaurant_to_dict(row)
+
+
+async def reviews(restaurant_id: Any, limit: int = 50) -> dict:
+    summary = await fetchrow(
+        """
+        select count(*)::int as total,
+               coalesce(round(avg(rating)::numeric, 1), 0)::float as average,
+               count(*) filter (where rating = 5)::int as five,
+               count(*) filter (where rating = 4)::int as four,
+               count(*) filter (where rating = 3)::int as three,
+               count(*) filter (where rating = 2)::int as two,
+               count(*) filter (where rating = 1)::int as one
+        from restaurant_reviews
+        where restaurant_id = $1
+        """,
+        restaurant_id,
+    )
+
+    rows = await fetch(
+        """
+        select rv.rating, rv.comment, rv.created_at, o.order_number,
+               split_part(coalesce(u.full_name, ''), ' ', 1) as first_name
+        from restaurant_reviews rv
+        join orders o on o.id = rv.order_id
+        join users u on u.id = rv.user_id
+        where rv.restaurant_id = $1
+        order by rv.created_at desc
+        limit $2
+        """,
+        restaurant_id,
+        limit,
+    )
+
+    return {
+        "summary": {
+            "total": summary["total"],
+            "average": summary["average"],
+            # Index 0 is one star.
+            "distribution": [
+                summary["one"],
+                summary["two"],
+                summary["three"],
+                summary["four"],
+                summary["five"],
+            ],
+        },
+        "reviews": [
+            {
+                "rating": row["rating"],
+                "comment": row["comment"],
+                "createdAt": row["created_at"].isoformat(),
+                "orderNumber": row["order_number"],
+                # First name only: enough to recognise a regular, no more.
+                "customerName": row["first_name"] or "Customer",
+            }
+            for row in rows
+        ],
+    }
+
+
+async def earnings(restaurant_id: Any, commission_pct: float, days: int) -> dict:
+    """Day-by-day takings for the last `days` days.
+
+    The restaurant's share of an order is its food plus packaging, less the
+    Foodos commission on the food. Tax goes to the government and the delivery
+    fee and tip to Foodos and the rider, so neither counts here. Only delivered
+    orders are earned; orders still moving are reported separately.
+    """
+    rows = await fetch(
+        """
+        with days as (
+          select generate_series(current_date - ($2::int - 1), current_date, interval '1 day')::date as day
+        )
+        select d.day,
+               count(o.id) filter (where o.status = 'delivered')::int as orders,
+               coalesce(sum(o.subtotal_paise) filter (where o.status = 'delivered'), 0)::bigint as food,
+               coalesce(sum(o.packaging_fee_paise) filter (where o.status = 'delivered'), 0)::bigint as packaging
+        from days d
+        left join orders o
+          on o.restaurant_id = $1 and o.placed_at::date = d.day
+        group by d.day
+        order by d.day
+        """,
+        restaurant_id,
+        days,
+    )
+
+    in_progress = await fetchrow(
+        """
+        select count(*)::int as orders, coalesce(sum(subtotal_paise), 0)::bigint as food
+        from orders
+        where restaurant_id = $1
+          and status in ('confirmed', 'preparing', 'ready', 'picked_up')
+          and placed_at::date > current_date - $2::int
+        """,
+        restaurant_id,
+        days,
+    )
+
+    rate = commission_pct / 100
+
+    def share(food: int, packaging: int) -> dict:
+        commission = round(food * rate)
+
+        return {
+            "foodPaise": int(food),
+            "packagingPaise": int(packaging),
+            "commissionPaise": commission,
+            "earningsPaise": int(food + packaging - commission),
+        }
+
+    daily = [
+        {"date": row["day"].isoformat(), "orders": row["orders"], **share(row["food"], row["packaging"])}
+        for row in rows
+    ]
+
+    return {
+        "days": days,
+        "commissionPct": commission_pct,
+        "totals": {
+            "orders": sum(d["orders"] for d in daily),
+            **share(sum(d["foodPaise"] for d in daily), sum(d["packagingPaise"] for d in daily)),
+        },
+        "daily": daily,
+        "inProgress": {"orders": in_progress["orders"], "foodPaise": int(in_progress["food"])},
+    }
