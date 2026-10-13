@@ -82,7 +82,8 @@ async def _order_response(order_id: uuid.UUID) -> dict:
                o.delivery_address, o.special_instructions, o.estimated_delivery_at,
                o.placed_at, o.delivered_at, o.cancelled_at, o.cancellation_reason,
                r.name as restaurant_name, r.address_line as restaurant_address,
-               r.city as restaurant_city, r.phone as restaurant_phone
+               r.city as restaurant_city, r.phone as restaurant_phone,
+               r.latitude as restaurant_lat, r.longitude as restaurant_lng
         from orders o
         join restaurants r on r.id = o.restaurant_id
         where o.id = $1
@@ -134,6 +135,9 @@ async def _order_response(order_id: uuid.UUID) -> dict:
             "name": order["restaurant_name"],
             "address": ", ".join(filter(None, [order["restaurant_address"], order["restaurant_city"]])),
             "phone": order["restaurant_phone"],
+            # For the tracking map; null for restaurants not yet placed on it.
+            "latitude": float(order["restaurant_lat"]) if order["restaurant_lat"] is not None else None,
+            "longitude": float(order["restaurant_lng"]) if order["restaurant_lng"] is not None else None,
         },
         "deliveryAddress": json.loads(address) if isinstance(address, str) else address,
         "items": [

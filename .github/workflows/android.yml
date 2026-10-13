@@ -16,11 +16,12 @@ on:
         description: 'Which app to build'
         required: false
         type: choice
-        default: both
+        default: all
         options:
-          - both
+          - all
           - customer
           - restaurant
+          - delivery
       apiUrl:
         # Blank is the normal case. A pre-filled default would always win over
         # the repository setting and quietly build against the wrong address.
@@ -46,7 +47,8 @@ jobs:
         app: >-
           ${{ fromJSON(github.event.inputs.app == 'customer' && '["customer"]'
           || github.event.inputs.app == 'restaurant' && '["restaurant"]'
-          || '["customer","restaurant"]') }}
+          || github.event.inputs.app == 'delivery' && '["delivery"]'
+          || '["customer","restaurant","delivery"]') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -190,9 +192,9 @@ jobs:
   # plain APKs attached. Its links never change, so a tester can bookmark them.
   release:
     needs: build
-    # Only when both apps were built, so the release never mixes a new customer
-    # app with an old restaurant app. A push always builds both.
-    if: github.event.inputs.app == '' || github.event.inputs.app == 'both'
+    # Only when all three apps were built, so the release never mixes versions
+    # that may not work together. A push always builds all three.
+    if: github.event.inputs.app == '' || github.event.inputs.app == 'all'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -210,6 +212,7 @@ jobs:
           mkdir release
           cp downloaded/foodos-customer-*.apk release/foodos-customer.apk
           cp downloaded/foodos-restaurant-*.apk release/foodos-restaurant.apk
+          cp downloaded/foodos-delivery-*.apk release/foodos-delivery.apk
           ls -lh release
 
       - name: Replace the testing release
@@ -220,13 +223,14 @@ jobs:
           TAG="latest-test-build"
 
           {
-            echo "Test build of both Foodos apps from commit \`${GITHUB_SHA::7}\` on \`${GITHUB_REF_NAME}\`."
+            echo "Test build of the three Foodos apps from commit \`${GITHUB_SHA::7}\` on \`${GITHUB_REF_NAME}\`."
             echo ""
             echo "**To install:** open this page on the Android phone, tap the APK under Assets, then Install."
             echo "Android warns about unknown apps because this is not from the Play Store; choose Install anyway."
             echo ""
             echo "- **foodos-customer.apk**: the customer app"
             echo "- **foodos-restaurant.apk**: the restaurant partner app"
+            echo "- **foodos-delivery.apk**: the delivery partner app"
             echo ""
             echo "Signed with a test key: for testing only, not for the Play Store."
           } > notes.md
@@ -236,6 +240,7 @@ jobs:
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
 
           gh release create "$TAG" release/foodos-customer.apk release/foodos-restaurant.apk \
+            release/foodos-delivery.apk \
             --target "$GITHUB_SHA" \
             --title "Foodos test build (${GITHUB_SHA::7})" \
             --notes-file notes.md \
@@ -247,4 +252,5 @@ jobs:
             echo "- Page: https://github.com/${GH_REPO}/releases/tag/${TAG}"
             echo "- Customer app: https://github.com/${GH_REPO}/releases/download/${TAG}/foodos-customer.apk"
             echo "- Restaurant app: https://github.com/${GH_REPO}/releases/download/${TAG}/foodos-restaurant.apk"
+            echo "- Delivery app: https://github.com/${GH_REPO}/releases/download/${TAG}/foodos-delivery.apk"
           } >> "$GITHUB_STEP_SUMMARY"

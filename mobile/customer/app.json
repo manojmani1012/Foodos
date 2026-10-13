@@ -20,7 +20,11 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "in.foodos.customer",
-      "versionCode": 1
+      "versionCode": 1,
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "output": "static",
@@ -43,6 +47,12 @@
           "android": {
             "usesCleartextTraffic": true
           }
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Foodos uses your location only when you choose to pin a delivery address, so the delivery partner can find your door."
         }
       ]
     ],

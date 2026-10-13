@@ -236,7 +236,7 @@ class TestTheDelivery:
 class TestPay:
     async def test_pay_is_base_plus_distance_plus_the_whole_tip(self, client):
         settings = get_settings()
-        order, owner, _ = await accepted_order(client, lat_lng=ANNA_NAGAR)
+        order, owner, customer = await accepted_order(client, lat_lng=ANNA_NAGAR)
         # The total must keep matching its parts, so the tip raises it too.
         await execute(
             "update orders set tip_paise = 3000, total_paise = total_paise + 3000 where id = $1::uuid", order["id"]
@@ -258,6 +258,11 @@ class TestPay:
 
         offer = (await requests_for(client, arjun))[0]
         accepted = (await step(client, arjun, offer["id"], "accept")).json()["delivery"]
+
+        # The customer's map gets both ends of the trip.
+        tracked = (await client.get(f"/api/v1/customer/orders/{order['id']}", headers=customer["headers"])).json()["order"]
+        assert (tracked["restaurant"]["latitude"], tracked["restaurant"]["longitude"]) == ANNA_NAGAR
+        assert (tracked["deliveryAddress"]["latitude"], tracked["deliveryAddress"]["longitude"]) == T_NAGAR
 
         km = accepted["distanceKm"]
         assert 4 < km < 6, f"Anna Nagar to T Nagar is about 5 km straight-line, got {km}"

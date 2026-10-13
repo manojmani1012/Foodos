@@ -82,6 +82,18 @@ export type OrderDetail = {
   // Present once a paid order is cancelled: 'pending' while Razorpay sends it
   // back, 'processed' once done, 'failed' if it could not be started.
   refund: Refund | null
+  // The rider once the order is accepted: searching first, then whoever took it.
+  delivery: Collection | null
+}
+
+export type Collection = {
+  status: 'searching' | 'accepted' | 'reached_restaurant' | 'picked_up' | 'arrived' | 'delivered' | 'cancelled'
+  partner: {
+    name: string
+    phone: string | null
+    vehicleType: string | null
+    vehicleNumber: string | null
+  } | null
 }
 
 export type Refund = {

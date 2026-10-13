@@ -3,6 +3,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,7 +13,8 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
-import { cancelOrder, fetchOrder, formatAddress, type Order } from '@/lib/orders'
+import { TrackingMap } from '@/components/TrackingMap'
+import { cancelOrder, fetchOrder, formatAddress, type Order, type Tracking } from '@/lib/orders'
 import { fetchOrderReview, reviewOrder } from '@/lib/profile'
 import { colors, radius, shadow, space, type } from '@/theme'
 
@@ -33,6 +35,9 @@ const STEPS = [
 // else moves it, so a slow poll is enough. This becomes a WebSocket when
 // realtime arrives.
 const POLL_INTERVAL_MS = 15000
+// While a rider has the order, poll faster so the map and status keep up.
+const POLL_WHILE_RIDING_MS = 8000
+const RIDING = new Set(['accepted', 'reached_restaurant', 'picked_up', 'arrived'])
 
 const CANCELLABLE = new Set(['pending', 'confirmed'])
 
@@ -86,13 +91,15 @@ export default function OrderScreen() {
 
   const finished = order?.status === 'delivered' || order?.status === 'cancelled'
 
+  const riding = !!order?.delivery && RIDING.has(order.delivery.status)
+
   useEffect(() => {
     if (!order || finished) return
 
-    const timer = setInterval(load, POLL_INTERVAL_MS)
+    const timer = setInterval(load, riding ? POLL_WHILE_RIDING_MS : POLL_INTERVAL_MS)
 
     return () => clearInterval(timer)
-  }, [order, finished, load])
+  }, [order, finished, riding, load])
 
   if (loading) {
     return (
@@ -177,6 +184,24 @@ export default function OrderScreen() {
                 </View>
               </View>
             </View>
+
+            {order.delivery ? <RiderCard tracking={order.delivery} /> : null}
+
+            {riding ? (
+              <TrackingMap
+                restaurant={
+                  order.restaurant.latitude != null && order.restaurant.longitude != null
+                    ? { latitude: order.restaurant.latitude, longitude: order.restaurant.longitude }
+                    : null
+                }
+                home={
+                  order.address.latitude != null && order.address.longitude != null
+                    ? { latitude: order.address.latitude, longitude: order.address.longitude }
+                    : null
+                }
+                rider={order.delivery?.location ?? null}
+              />
+            ) : null}
 
             <View style={styles.card}>
               {STEPS.map((step, index) => {
@@ -356,6 +381,56 @@ export default function OrderScreen() {
   )
 }
 
+// Who is bringing the order, in a sentence that matches where they are.
+function RiderCard({ tracking }: { tracking: Tracking }) {
+  const partner = tracking.partner
+
+  if (tracking.status === 'searching' || !partner) {
+    return (
+      <View style={styles.riderCard}>
+        <View style={styles.riderIcon}>
+          <Feather name="search" size={18} color={colors.brand} />
+        </View>
+        <View style={styles.riderBody}>
+          <Text style={styles.riderTitle}>Finding a delivery partner</Text>
+          <Text style={styles.riderHint}>We are assigning someone near the restaurant.</Text>
+        </View>
+      </View>
+    )
+  }
+
+  const line =
+    tracking.status === 'accepted' || tracking.status === 'reached_restaurant'
+      ? `${partner.name} is collecting your order`
+      : tracking.status === 'picked_up'
+        ? `${partner.name} is on the way with your order`
+        : tracking.status === 'arrived'
+          ? `${partner.name} has arrived`
+          : `Delivered by ${partner.name}`
+
+  return (
+    <View style={styles.riderCard}>
+      <View style={styles.riderIcon}>
+        <Feather name="navigation" size={18} color={colors.brand} />
+      </View>
+      <View style={styles.riderBody}>
+        <Text style={styles.riderTitle}>{line}</Text>
+        {partner.vehicleNumber ? (
+          <Text style={styles.riderHint}>
+            {partner.vehicleType ? `${partner.vehicleType[0].toUpperCase()}${partner.vehicleType.slice(1)} · ` : ''}
+            {partner.vehicleNumber}
+          </Text>
+        ) : null}
+      </View>
+      {partner.phone ? (
+        <Pressable style={styles.riderCall} onPress={() => Linking.openURL(`tel:${partner.phone}`)}>
+          <Feather name="phone" size={16} color={colors.surface} />
+        </Pressable>
+      ) : null}
+    </View>
+  )
+}
+
 function BillRow({ label, value, tone }: { label: string; value: number; tone?: 'good' }) {
   return (
     <View style={styles.billRow}>
@@ -368,6 +443,37 @@ function BillRow({ label, value, tone }: { label: string; value: number; tone?: 
 }
 
 const styles = StyleSheet.create({
+  riderCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    padding: space.lg,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+    ...shadow.card,
+  },
+  riderIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.brandSoft,
+  },
+  riderBody: { flex: 1 },
+  riderTitle: { ...type.bodyStrong, color: colors.ink },
+  riderHint: { ...type.caption, color: colors.muted, marginTop: 2 },
+  riderCall: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.brand,
+  },
+
   screen: { flex: 1, backgroundColor: colors.ground },
   flex: { flex: 1 },
   centered: {

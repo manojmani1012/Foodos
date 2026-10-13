@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -21,6 +22,7 @@ import {
   markOrderReady,
   rejectOrder,
   type OrderDetail,
+  type Collection,
   type Refund,
 } from '@/lib/restaurant'
 import { colors, radius, shadow, space, type } from '@/theme'
@@ -62,6 +64,18 @@ export default function OrderDetailScreen() {
   useEffect(() => {
     load()
   }, [load])
+
+  // While the order is still with the restaurant, keep the rider card current:
+  // who accepted it, and when they are at the counter.
+  const live = !!order && ['confirmed', 'preparing', 'ready'].includes(order.status)
+
+  useEffect(() => {
+    if (!live) return
+
+    const timer = setInterval(load, 15000)
+
+    return () => clearInterval(timer)
+  }, [live, load])
 
   // Every action goes through here so a failure never leaves the screen
   // showing a state the server did not agree to.
@@ -129,6 +143,8 @@ export default function OrderDetailScreen() {
         </View>
 
         {order.refund ? <RefundCard refund={order.refund} /> : null}
+
+        {order.delivery ? <RiderCard collection={order.delivery} /> : null}
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Customer</Text>
@@ -327,6 +343,41 @@ function RefundCard({ refund }: { refund: Refund }) {
   )
 }
 
+// Who is coming for the food, so the counter knows whom to hand it to.
+function RiderCard({ collection }: { collection: Collection }) {
+  const partner = collection.partner
+
+  const line =
+    collection.status === 'searching' || !partner
+      ? 'Finding a delivery partner'
+      : collection.status === 'accepted'
+        ? `${partner.name} is on the way to collect`
+        : collection.status === 'reached_restaurant'
+          ? `${partner.name} is here to collect`
+          : collection.status === 'delivered'
+            ? `Delivered by ${partner.name}`
+            : `Collected by ${partner.name}`
+
+  return (
+    <View style={styles.riderCard}>
+      <Feather
+        name={collection.status === 'searching' ? 'search' : 'navigation'}
+        size={18}
+        color={colors.brand}
+      />
+      <View style={styles.flex}>
+        <Text style={styles.riderTitle}>{line}</Text>
+        {partner?.vehicleNumber ? <Text style={styles.riderHint}>{partner.vehicleNumber}</Text> : null}
+      </View>
+      {partner?.phone ? (
+        <Pressable style={styles.riderCall} onPress={() => Linking.openURL(`tel:${partner.phone}`)}>
+          <Feather name="phone" size={15} color="#fff" />
+        </Pressable>
+      ) : null}
+    </View>
+  )
+}
+
 function Header({ onBack, title }: { onBack: () => void; title: string }) {
   return (
     <View style={styles.header}>
@@ -383,6 +434,28 @@ const styles = StyleSheet.create({
   statusText: { ...type.heading, color: colors.brandInk },
   statusMeta: { ...type.caption, color: colors.body, marginTop: 2 },
   cancelReason: { ...type.small, color: colors.danger, marginTop: space.sm },
+
+  riderCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    padding: space.lg,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+    ...shadow.card,
+  },
+  riderTitle: { ...type.bodyStrong, color: colors.ink },
+  riderHint: { ...type.caption, color: colors.muted, marginTop: 2 },
+  riderCall: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.brand,
+  },
 
   refundCard: {
     flexDirection: 'row',

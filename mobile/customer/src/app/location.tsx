@@ -1,4 +1,5 @@
 import { Feather } from '@expo/vector-icons'
+import * as Location from 'expo-location'
 import { useRouter } from 'expo-router'
 import { useState } from 'react'
 import {
@@ -36,6 +37,32 @@ export default function LocationScreen() {
     city: 'Chennai',
     pincode: '',
   })
+  // Pinned only when the customer asks: an office address added from home must
+  // not send the rider to their home.
+  const [pin, setPin] = useState<{ latitude: number; longitude: number } | null>(null)
+  const [pinning, setPinning] = useState(false)
+
+  async function pinCurrentLocation() {
+    setPinning(true)
+    setError('')
+
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync()
+
+      if (permission.status !== 'granted') {
+        setError('Allow location access to pin this address, or save it without a pin')
+        return
+      }
+
+      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+
+      setPin({ latitude: position.coords.latitude, longitude: position.coords.longitude })
+    } catch {
+      setError('Could not get your location. Try again outdoors, or save without a pin')
+    } finally {
+      setPinning(false)
+    }
+  }
 
   async function save() {
     if (!draft.line1.trim() || !draft.city.trim()) {
@@ -51,12 +78,15 @@ export default function LocationScreen() {
         ...draft,
         line2: draft.line2 || null,
         pincode: draft.pincode || null,
+        latitude: pin?.latitude ?? null,
+        longitude: pin?.longitude ?? null,
       })
 
       await location.reload()
       location.select(saved)
       setAdding(false)
       setDraft({ label: 'Home', line1: '', line2: '', city: 'Chennai', pincode: '' })
+      setPin(null)
     } catch (saveError: any) {
       setError(saveError.message || 'Could not save that address')
     } finally {
@@ -165,6 +195,33 @@ export default function LocationScreen() {
                 maxLength={6}
               />
 
+              {pin ? (
+                <View style={styles.pinned}>
+                  <Feather name="map-pin" size={15} color={colors.brand} />
+                  <Text style={styles.pinnedText}>Pinned to where you are now</Text>
+                  <Pressable onPress={() => setPin(null)} hitSlop={8}>
+                    <Text style={styles.pinClear}>Remove</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <Pressable
+                  style={[styles.pinButton, pinning && styles.disabled]}
+                  onPress={pinCurrentLocation}
+                  disabled={pinning}
+                >
+                  {pinning ? (
+                    <ActivityIndicator color={colors.brand} size="small" />
+                  ) : (
+                    <Feather name="crosshair" size={15} color={colors.brand} />
+                  )}
+                  <Text style={styles.pinButtonText}>Use my current location</Text>
+                </Pressable>
+              )}
+              <Text style={styles.pinHint}>
+                Only if you are at this address now. It lets the delivery partner navigate straight to
+                your door.
+              </Text>
+
               {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
               <View style={styles.formActions}>
@@ -209,6 +266,32 @@ function Field({
 }
 
 const styles = StyleSheet.create({
+  pinButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: space.sm,
+    marginTop: space.sm,
+    paddingVertical: space.md,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.brand,
+    borderStyle: 'dashed',
+  },
+  pinButtonText: { ...type.smallStrong, color: colors.brand },
+  pinned: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginTop: space.sm,
+    padding: space.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.brandSoft,
+  },
+  pinnedText: { ...type.smallStrong, color: colors.brandInk, flex: 1 },
+  pinClear: { ...type.smallStrong, color: colors.danger },
+  pinHint: { ...type.caption, color: colors.muted, marginTop: space.xs, lineHeight: 16 },
+
   screen: { flex: 1, backgroundColor: colors.ground },
   flex: { flex: 1 },
   content: { padding: space.lg, gap: space.md, paddingBottom: space.xxxl },

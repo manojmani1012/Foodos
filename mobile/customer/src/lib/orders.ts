@@ -52,6 +52,10 @@ export type Address = {
   line2: string | null
   city: string
   pincode: string | null
+  // Set when the customer pinned their location while at this address, so
+  // the rider can navigate straight to it.
+  latitude?: number | null
+  longitude?: number | null
   isDefault: boolean
 }
 
@@ -75,8 +79,22 @@ export type Order = {
   id: string
   orderNumber: string
   status: string
-  restaurant: { id: string; name: string; address: string; phone: string | null }
-  address: { line1: string; line2?: string | null; city: string; pincode?: string | null }
+  restaurant: {
+    id: string
+    name: string
+    address: string
+    phone: string | null
+    latitude: number | null
+    longitude: number | null
+  }
+  address: {
+    line1: string
+    line2?: string | null
+    city: string
+    pincode?: string | null
+    latitude?: number | null
+    longitude?: number | null
+  }
   items: {
     id: string
     name: string
@@ -97,7 +115,21 @@ export type Order = {
   cancellationReason: string | null
   // Set when a paid order was cancelled: the money going back to the customer.
   refund: { status: 'pending' | 'processed' | 'failed'; amount: number } | null
+  // The rider, once one is assigned. Phone and position only while the order is
+  // on its way.
+  delivery: Tracking | null
   timeline: { status: string; note: string | null; at: string }[]
+}
+
+export type Tracking = {
+  status: 'searching' | 'accepted' | 'reached_restaurant' | 'picked_up' | 'arrived' | 'delivered' | 'cancelled'
+  partner: {
+    name: string
+    phone: string | null
+    vehicleType: string | null
+    vehicleNumber: string | null
+  } | null
+  location: { latitude: number; longitude: number; updatedAt: string | null } | null
 }
 
 export function mapOrder(api: any): Order {
@@ -126,6 +158,7 @@ export function mapOrder(api: any): Order {
     estimatedDeliveryAt: api.estimatedDeliveryAt,
     cancellationReason: api.cancellationReason,
     refund: api.refund ? { status: api.refund.status, amount: rupees(api.refund.amountPaise) } : null,
+    delivery: api.delivery ?? null,
     timeline: api.timeline || [],
   }
 }
