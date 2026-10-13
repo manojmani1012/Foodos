@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     razorpay_key_secret: str = ""
     razorpay_webhook_secret: str = ""
 
+    # Rider pay per delivery: a base amount plus a rate per km travelled
+    # (rider to restaurant, then restaurant to customer), and every rupee of
+    # the customer's tip. Placeholders until the client sets real numbers.
+    rider_base_pay_paise: int = Field(default=2500, ge=0)
+    rider_pay_per_km_paise: int = Field(default=600, ge=0)
+
     database_pool_min: int = Field(default=1, ge=1)
     database_pool_max: int = Field(default=10, ge=1)
 

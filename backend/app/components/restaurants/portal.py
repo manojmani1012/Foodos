@@ -12,6 +12,7 @@ import datetime
 from ...database import fetch, fetchrow, transaction
 from ...errors import conflict, forbidden, not_found
 from ..media import service as media
+from ..delivery import service as delivery
 from ..payments import refunds
 
 # What the restaurant is allowed to do, and from where. The customer places the
@@ -276,6 +277,7 @@ async def get_order(restaurant_id: Any, order_id: str) -> dict:
         "specialInstructions": order["special_instructions"],
         "cancellationReason": order["cancellation_reason"],
         "refund": await refunds.refund_for_order(identifier),
+        "delivery": await delivery.tracking_for_order(identifier),
     }
 
 
@@ -355,9 +357,15 @@ async def _move_order(
 
 
 async def accept_order(restaurant_id: Any, order_id: str, user_id: uuid.UUID) -> dict:
-    return await _move_order(
+    await _move_order(
         restaurant_id, order_id, ACCEPTABLE_FROM, "preparing", user_id, "Accepted by restaurant"
     )
+
+    # Riders are sought as soon as cooking starts, not when the food is ready,
+    # so one is usually waiting by the time it is.
+    await delivery.open_delivery(uuid.UUID(order_id))
+
+    return await get_order(restaurant_id, order_id)
 
 
 async def reject_order(

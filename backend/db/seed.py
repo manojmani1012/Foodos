@@ -342,6 +342,77 @@ async def seed(connection: asyncpg.Connection, reset: bool = False) -> None:
     print(f"Added {len(OFFERS)} offers")
 
 
+# Where the demo restaurants are, so delivery distance and rider pay can be
+# worked out and the customer's map has somewhere to point. Real restaurants
+# get their coordinates when they are onboarded.
+DEMO_COORDINATES = {
+    "The Biryani House": (13.0850, 80.2101),  # Anna Nagar
+    "Pizza Corner": (12.9815, 80.2180),  # Velachery
+    "Burger Hub": (13.0418, 80.2341),  # T Nagar
+    "Dosa Express": (13.0012, 80.2565),  # Adyar
+    "Healthy Bowl": (12.9990, 80.2707),  # Besant Nagar
+}
+
+# Approved riders for testing. A rider who signs up for real starts as pending
+# and waits for an admin; these skip that so the full order flow can be tried.
+DEMO_RIDERS = [
+    {"phone": "+919100000001", "name": "Arjun Kumar", "vehicle": "bike", "number": "TN 09 AB 1234"},
+    {"phone": "+919100000002", "name": "Bala Murugan", "vehicle": "scooter", "number": "TN 10 CD 5678"},
+    {"phone": "+919100000003", "name": "Charan Raj", "vehicle": "ev", "number": "TN 07 EF 9012"},
+]
+
+
+async def seed_demo_extras(connection: asyncpg.Connection) -> None:
+    """Runs on every seed, including against an existing catalogue, and is safe
+    to repeat: it only fills in what is missing."""
+    placed = 0
+
+    for name, (latitude, longitude) in DEMO_COORDINATES.items():
+        result = await connection.execute(
+            """
+            update restaurants set latitude = $2, longitude = $3
+            where name = $1 and latitude is null
+            """,
+            name,
+            latitude,
+            longitude,
+        )
+        placed += int(result.split()[-1])
+
+    print(f"Placed {placed} restaurant(s) on the map")
+
+    for entry in DEMO_RIDERS:
+        user_id = await connection.fetchval(
+            """
+            insert into users (phone, full_name) values ($1, $2)
+            on conflict (phone) do update set full_name = coalesce(users.full_name, excluded.full_name)
+            returning id
+            """,
+            entry["phone"],
+            entry["name"],
+        )
+        await connection.execute(
+            "insert into user_roles (user_id, role) values ($1, 'delivery_partner') on conflict do nothing",
+            user_id,
+        )
+        await connection.execute(
+            """
+            insert into delivery_partners (user_id, vehicle_type, vehicle_number, city, status)
+            values ($1, $2, $3, 'Chennai', 'active')
+            on conflict (user_id) do update
+              set status = 'active',
+                  city = coalesce(delivery_partners.city, 'Chennai'),
+                  vehicle_type = excluded.vehicle_type,
+                  vehicle_number = coalesce(delivery_partners.vehicle_number, excluded.vehicle_number)
+            """,
+            user_id,
+            entry["vehicle"],
+            entry["number"],
+        )
+
+    print(f"Ready: {len(DEMO_RIDERS)} approved demo rider(s)")
+
+
 async def main() -> None:
     settings = get_settings()
 
@@ -356,6 +427,7 @@ async def main() -> None:
     try:
         async with connection.transaction():
             await seed(connection, reset="--reset" in sys.argv)
+            await seed_demo_extras(connection)
     finally:
         await connection.close()
 

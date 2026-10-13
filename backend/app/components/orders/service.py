@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from ...database import fetch, fetchrow, transaction
 from ...errors import bad_request, conflict, forbidden, not_found
+from ..delivery import service as delivery
 from ..payments import refunds
 from .pricing import quote_cart
 
@@ -168,6 +169,9 @@ async def _order_response(order_id: uuid.UUID) -> dict:
         # Present once a paid order has been cancelled, so the app can say
         # "refund of Rs X started" rather than leaving the customer guessing.
         "refund": await refunds.refund_for_order(order_id),
+        # The rider, once one has the order: name, vehicle, and while it is on
+        # its way, their phone and live position.
+        "delivery": await delivery.tracking_for_order(order_id),
         "timeline": [
             {"status": row["status"], "note": row["note"], "at": row["created_at"].isoformat()}
             for row in history
