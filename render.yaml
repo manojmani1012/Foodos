@@ -1,29 +1,42 @@
 # Render blueprint for the Foodos API.
 #
+# One service serves both apps: the customer app and the restaurant partner app
+# talk to the same API.
+#
 # The database is not declared here: Neon's free tier keeps data when the
-# service sleeps, which Render's free Postgres does not. Paste Neon's
-# connection string into DATABASE_URL when the service is created.
+# service sleeps, which Render's free Postgres deletes after 30 days. Paste
+# Neon's DIRECT connection string (connection pooling turned off) into
+# DATABASE_URL when the service is created.
 
 services:
   - type: web
     name: foodos-api
     runtime: docker
     plan: free
-    # Closest region to the people testing this.
+    # Closest Render region to India. Create the Neon project in Singapore
+    # (aws ap-southeast-1) too, so every query is not a round trip abroad.
     region: singapore
     branch: dev
-    dockerfilePath: backend/Dockerfile
-    dockerContext: backend
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
     # Render restarts the container if this stops answering.
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      # Makes the settings validator insist on real secrets instead of
-      # falling back to the development placeholders.
+      # staging: real secrets and strict settings, like production, but login
+      # codes may be shown on screen. Switch to production once the client's
+      # DLT registration is approved and MSG91 is connected.
       - key: NODE_ENV
-        value: production
+        value: staging
 
-      # Neon's connection string. Set in the dashboard, never in the repo.
+      # While no SMS provider is connected, the login code is returned to the
+      # app and shown on screen, so testers can sign in. Anyone who knows a
+      # phone number can therefore sign in as it: keep test data only on this
+      # deployment until SMS is live. Ignored when NODE_ENV=production.
+      - key: EXPOSE_OTP_IN_RESPONSE
+        value: "true"
+
+      # Neon's direct connection string. Set in the dashboard, never in the repo.
       - key: DATABASE_URL
         sync: false
 
@@ -40,10 +53,11 @@ services:
       - key: RAZORPAY_KEY_SECRET
         sync: false
       # Razorpay generates this when the webhook is pointed at this service.
+      # Leave it empty on the first deploy and add it afterwards.
       - key: RAZORPAY_WEBHOOK_SECRET
         sync: false
 
-      # Only the browser frontend needs this; the mobile app does not send
-      # Origin headers and is unaffected.
+      # Only the browser frontend needs this; the mobile apps do not send
+      # Origin headers and are unaffected.
       - key: CORS_ORIGINS
         value: http://localhost:5173

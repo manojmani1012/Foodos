@@ -127,11 +127,20 @@ jobs:
           # The address is compiled into the APK and cannot be changed
           # afterwards, so an unreachable one means forty minutes of work for
           # an app that cannot talk to anything. Better to stop here.
-          if ! curl -fsS -m 25 -o /dev/null "$URL/health"; then
-            echo "::error::$URL/health did not respond. If this is a Cloudflare tunnel, check it is still running on your machine - the address changes every restart. Update the EXPO_PUBLIC_API_URL setting, or type the current address into the box when starting this run."
-            exit 1
-          fi
-          echo "The API answered. Good to build."
+          #
+          # Render's free tier sleeps when idle and takes about a minute to
+          # wake, so a slow first answer is retried before giving up.
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS -m 30 -o /dev/null "$URL/health"; then
+              echo "The API answered (attempt $attempt). Good to build."
+              exit 0
+            fi
+            echo "No answer yet (attempt $attempt of 6); the server may be waking up."
+            sleep 10
+          done
+
+          echo "::error::$URL/health did not respond after about four minutes. On Render, check the service is deployed and running. On a Cloudflare tunnel, check it is still running on your machine - its address changes every restart. Then update the EXPO_PUBLIC_API_URL setting, or type the current address into the box when starting this run."
+          exit 1
 
       - name: Generate the native project
         env:
