@@ -146,6 +146,15 @@ export default function OrderScreen() {
             {order.cancellationReason ? (
               <Text style={styles.cancelledReason}>{order.cancellationReason}</Text>
             ) : null}
+            {order.refund ? (
+              <Text style={styles.refundNote}>
+                {order.refund.status === 'processed'
+                  ? `₹${order.refund.amount} has been refunded to your original payment method.`
+                  : order.refund.status === 'pending'
+                    ? `Refund of ₹${order.refund.amount} started. It reaches your original payment method in 5-7 working days.`
+                    : `Your refund of ₹${order.refund.amount} is delayed. Please contact Foodos support.`}
+              </Text>
+            ) : null}
           </View>
         ) : (
           <>
@@ -457,6 +466,7 @@ const styles = StyleSheet.create({
   },
   cancelledTitle: { ...type.heading, color: colors.danger },
   cancelledReason: { ...type.small, color: colors.danger, textAlign: 'center' },
+  refundNote: { ...type.small, color: colors.body, textAlign: 'center', marginTop: space.xs },
 
   errorText: { ...type.small, color: colors.danger, textAlign: 'center' },
   cancelButton: {

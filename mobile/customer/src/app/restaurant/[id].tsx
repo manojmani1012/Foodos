@@ -1,4 +1,5 @@
 import { Feather } from '@expo/vector-icons'
+import { Image } from 'expo-image'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -327,7 +328,16 @@ function MenuRow({
 
       <View style={styles.rowRight}>
         <View style={styles.rowImage}>
-          <Text style={styles.rowEmoji}>{item.emoji}</Text>
+          {item.imageUrl ? (
+            <Image
+              source={{ uri: item.imageUrl }}
+              style={styles.rowPhoto}
+              contentFit="cover"
+              transition={150}
+            />
+          ) : (
+            <Text style={styles.rowEmoji}>{item.emoji}</Text>
+          )}
         </View>
 
         <View style={styles.rowAction}>
@@ -507,7 +517,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.ground,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
+  rowPhoto: { width: '100%', height: '100%' },
   rowEmoji: { fontSize: 38 },
   // Overlaps the image, the way food apps place the action.
   rowAction: { marginTop: -18, alignItems: 'center' },

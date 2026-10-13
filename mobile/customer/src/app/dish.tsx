@@ -1,4 +1,5 @@
 import { Feather } from '@expo/vector-icons'
+import { Image } from 'expo-image'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useMemo, useState } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
@@ -70,9 +71,18 @@ export default function DishScreen() {
       <Header onBack={() => router.back()} title={dish.name} subtitle={restaurant.name} />
 
       <ScrollView contentContainerStyle={{ paddingBottom: 140 }} showsVerticalScrollIndicator={false}>
-        <View style={[styles.hero, { backgroundColor: restaurant.color }]}>
-          <Text style={styles.heroEmoji}>{dish.emoji}</Text>
-        </View>
+        {dish.imageUrl ? (
+          <Image
+            source={{ uri: dish.imageUrl }}
+            style={styles.heroPhoto}
+            contentFit="cover"
+            transition={200}
+          />
+        ) : (
+          <View style={[styles.hero, { backgroundColor: restaurant.color }]}>
+            <Text style={styles.heroEmoji}>{dish.emoji}</Text>
+          </View>
+        )}
 
         <View style={styles.card}>
           <View style={styles.titleRow}>
@@ -170,6 +180,8 @@ const styles = StyleSheet.create({
 
   hero: { height: 180, alignItems: 'center', justifyContent: 'center' },
   heroEmoji: { fontSize: 76 },
+  // The restaurant app crops every photo to 4:3, so the hero matches it.
+  heroPhoto: { width: '100%', aspectRatio: 4 / 3, backgroundColor: colors.ground },
 
   card: {
     marginHorizontal: space.lg,

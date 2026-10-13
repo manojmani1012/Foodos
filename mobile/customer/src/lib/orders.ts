@@ -95,6 +95,8 @@ export type Order = {
   placedAt: string
   estimatedDeliveryAt: string | null
   cancellationReason: string | null
+  // Set when a paid order was cancelled: the money going back to the customer.
+  refund: { status: 'pending' | 'processed' | 'failed'; amount: number } | null
   timeline: { status: string; note: string | null; at: string }[]
 }
 
@@ -123,6 +125,7 @@ export function mapOrder(api: any): Order {
     placedAt: api.placedAt,
     estimatedDeliveryAt: api.estimatedDeliveryAt,
     cancellationReason: api.cancellationReason,
+    refund: api.refund ? { status: api.refund.status, amount: rupees(api.refund.amountPaise) } : null,
     timeline: api.timeline || [],
   }
 }

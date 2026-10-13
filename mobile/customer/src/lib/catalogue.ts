@@ -1,4 +1,13 @@
-import { request } from './apiClient'
+import { API_BASE_URL, request } from './apiClient'
+
+// Uploaded photos arrive as /media/<id>, relative to the API, because the
+// server cannot reliably know its own public address behind a proxy.
+export function resolveImageUrl(imageUrl: string | null | undefined): string | null {
+  if (!imageUrl) return null
+  if (/^https?:\/\//.test(imageUrl)) return imageUrl
+
+  return `${API_BASE_URL}${imageUrl.startsWith('/') ? '' : '/'}${imageUrl}`
+}
 
 // Turns API responses into what the screens render.
 //
@@ -147,6 +156,9 @@ export type MenuItem = {
   isAvailable: boolean
   rating: number | null
   ratingCount: number
+  // The restaurant's own photo when they have uploaded one; the emoji is the
+  // fallback until then.
+  imageUrl: string | null
   emoji: string
   addOns: { id: string; label: string; price: number; isAvailable: boolean }[]
 }
@@ -182,6 +194,7 @@ export function mapMenuItem(api: any, categoryName?: string): MenuItem {
     isAvailable: api.isAvailable,
     rating: api.rating,
     ratingCount: api.ratingCount,
+    imageUrl: resolveImageUrl(api.imageUrl),
     emoji: itemArt(`${api.name} ${categoryName ?? ''}`),
     addOns: (api.addons || []).map((addon: any) => ({
       id: addon.id,
