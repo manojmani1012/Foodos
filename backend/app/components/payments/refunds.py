@@ -167,7 +167,7 @@ async def apply_refund_webhook(event_type: str, entity: dict) -> dict:
             """
             update refunds set status = 'processed', processed_at = coalesce(processed_at, now())
             where provider_refund_id = $1
-            returning id
+            returning id, order_id
             """,
             provider_refund_id,
         )
@@ -195,4 +195,6 @@ async def apply_refund_webhook(event_type: str, entity: dict) -> dict:
     if updated is None:
         return {"handled": False, "reason": "unknown refund"}
 
-    return {"handled": True, "event": event_type}
+    order_id = updated["order_id"]
+
+    return {"handled": True, "event": event_type, "orderId": str(order_id) if order_id else None}

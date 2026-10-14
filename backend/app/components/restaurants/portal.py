@@ -13,6 +13,7 @@ from ...database import fetch, fetchrow, transaction
 from ...errors import conflict, forbidden, not_found
 from ..media import service as media
 from ..delivery import service as delivery
+from ..notifications import events
 from ..payments import refunds
 
 # What the restaurant is allowed to do, and from where. The customer places the
@@ -365,6 +366,9 @@ async def accept_order(restaurant_id: Any, order_id: str, user_id: uuid.UUID) ->
     # so one is usually waiting by the time it is.
     await delivery.open_delivery(uuid.UUID(order_id))
 
+    await events.order_accepted(uuid.UUID(order_id))
+    await events.delivery_available(uuid.UUID(order_id))
+
     return await get_order(restaurant_id, order_id)
 
 
@@ -385,13 +389,21 @@ async def reject_order(
     # order locked, and a failed refund must not un-reject the order.
     await refunds.refund_if_paid(uuid.UUID(order_id), reason or "Rejected by restaurant", user_id)
 
+    # After the refund, so the customer is told it has started.
+    await events.cancelled(uuid.UUID(order_id), "restaurant", restaurant_saw_it=True)
+
     return await get_order(restaurant_id, order_id)
 
 
 async def mark_ready(restaurant_id: Any, order_id: str, user_id: uuid.UUID) -> dict:
-    return await _move_order(
+    order = await _move_order(
         restaurant_id, order_id, {"preparing"}, "ready", user_id, "Ready for pickup"
     )
+
+    # A rider waiting at the counter can collect it now.
+    await events.food_ready(uuid.UUID(order_id))
+
+    return order
 
 
 RESTAURANT_COLUMNS = """

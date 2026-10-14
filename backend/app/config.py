@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     razorpay_key_secret: str = ""
     razorpay_webhook_secret: str = ""
 
+    # Push notifications go through Expo's push service, which needs no key.
+    # An access token is optional: set one (expo.dev > Access tokens) and turn
+    # on "enhanced push security" there so only this server can send.
+    push_enabled: bool = True
+    expo_access_token: str = ""
+
     # Rider pay per delivery: a base amount plus a rate per km travelled
     # (rider to restaurant, then restaurant to customer), and every rupee of
     # the customer's tip. Placeholders until the client sets real numbers.

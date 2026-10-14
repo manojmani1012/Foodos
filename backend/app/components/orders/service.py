@@ -8,6 +8,7 @@ from typing import Any, Optional
 from ...database import fetch, fetchrow, transaction
 from ...errors import bad_request, conflict, forbidden, not_found
 from ..delivery import service as delivery
+from ..notifications import events
 from ..payments import refunds
 from .pricing import quote_cart
 
@@ -307,6 +308,11 @@ async def place_order(
             "Order placed" if is_cash else "Awaiting payment",
         )
 
+    # A cash order goes straight to the restaurant; an online one waits until
+    # it is paid (see payments).
+    if is_cash:
+        await events.new_order(order_id)
+
     return await _order_response(order_id)
 
 
@@ -428,5 +434,8 @@ async def cancel_order(user_id: uuid.UUID, order_id: str, reason: Optional[str] 
 
     # After the cancellation has committed, never inside it.
     await refunds.refund_if_paid(identifier, reason or "Cancelled by customer", user_id)
+
+    # An unpaid online order never reached the restaurant.
+    await events.cancelled(identifier, "customer", restaurant_saw_it=order["status"] != "pending")
 
     return await _order_response(identifier)

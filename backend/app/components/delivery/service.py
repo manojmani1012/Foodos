@@ -25,6 +25,7 @@ from typing import Any, Optional
 from ...config import get_settings
 from ...database import fetch, fetchrow, fetchval, transaction
 from ...errors import bad_request, conflict, forbidden, not_found
+from ..notifications import events
 
 # Statuses where the rider still has the order in hand.
 ACTIVE = ("accepted", "reached_restaurant", "picked_up", "arrived")
@@ -40,6 +41,15 @@ ACTIONS = {
     "picked-up": ({"accepted", "reached_restaurant"}, "picked_up", "picked_up_at", "picked_up"),
     "arrived": ({"picked_up"}, "arrived", "arrived_at", "on_the_way"),
     "delivered": ({"picked_up", "arrived"}, "delivered", "delivered_at", "delivered"),
+}
+
+# Who hears about each rider step: the restaurant when the rider is at the
+# counter, the customer for everything after.
+STEP_EVENTS = {
+    "reached": events.rider_at_restaurant,
+    "picked-up": events.picked_up,
+    "arrived": events.rider_arrived,
+    "delivered": events.delivered,
 }
 
 ORDER_NOTES = {
@@ -326,7 +336,7 @@ async def accept(user_id: uuid.UUID, delivery_id: str) -> dict:
 
         delivery = await connection.fetchrow(
             """
-            select d.id, d.status, o.tip_paise, o.delivery_address,
+            select d.id, d.status, d.order_id, o.tip_paise, o.delivery_address,
                    r.latitude as restaurant_lat, r.longitude as restaurant_lng
             from deliveries d
             join orders o on o.id = d.order_id
@@ -382,6 +392,8 @@ async def accept(user_id: uuid.UUID, delivery_id: str) -> dict:
             user_id,
             rider_pay(total) + delivery["tip_paise"],
         )
+
+    await events.rider_assigned(delivery["order_id"])
 
     return await active(user_id)
 
@@ -483,6 +495,9 @@ async def advance(user_id: uuid.UUID, delivery_id: str, action: str, cash_collec
                 user_id,
                 ORDER_NOTES[order_status],
             )
+
+    # Told after the step has committed.
+    await STEP_EVENTS[action](delivery["order_id"])
 
     if to_status == "delivered":
         return {"delivered": True, "delivery": await _delivery_detail(identifier)}

@@ -18,6 +18,10 @@ os.environ["OTP_PEPPER"] = "test-otp-pepper"
 os.environ["EXPOSE_OTP_IN_RESPONSE"] = "true"
 os.environ["SMS_PROVIDER"] = "console"
 
+# No test may reach Expo's push service. The push tests turn this on and stub
+# the HTTP call themselves.
+os.environ["PUSH_ENABLED"] = "false"
+
 # No test may call the real payment gateway. Payment tests set these themselves
 # and stub the HTTP call.
 os.environ["RAZORPAY_KEY_ID"] = ""

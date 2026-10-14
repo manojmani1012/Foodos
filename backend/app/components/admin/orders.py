@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 from ...database import fetch, fetchrow, fetchval, transaction
 from ...errors import conflict, not_found
+from ..notifications import events
 from ..orders import service as orders_service
 from ..payments import refunds
 from . import audit
@@ -293,9 +294,9 @@ async def cancel(order_id: str, reason: str, actor_id: uuid.UUID, ip: Optional[s
         # Locked in the same order as a rider's step (delivery, then order),
         # so a rider tapping "Picked up" at this moment waits rather than
         # deadlocks.
-        await connection.fetchrow(
+        held = await connection.fetchrow(
             """
-            select d.id from deliveries d join orders o on o.id = d.order_id
+            select d.id, d.status, d.partner_id from deliveries d join orders o on o.id = d.order_id
             where d.order_id = $1
             for update of d, o
             """,
@@ -354,6 +355,14 @@ async def cancel(order_id: str, reason: str, actor_id: uuid.UUID, ip: Optional[s
 
     # After the cancellation has committed, never inside it.
     await refunds.refund_if_paid(identifier, reason, actor_id)
+
+    carrying = held is not None and held["status"] in ("accepted", "reached_restaurant", "picked_up", "arrived")
+    await events.cancelled(
+        identifier,
+        "admin",
+        restaurant_saw_it=order["status"] != "pending",
+        rider_id=held["partner_id"] if carrying else None,
+    )
 
     return await get_order(str(identifier))
 

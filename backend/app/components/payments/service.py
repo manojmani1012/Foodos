@@ -14,6 +14,7 @@ from typing import Any, Optional
 from ...config import get_settings
 from ...database import execute, fetchrow, transaction
 from ...errors import bad_request, conflict, not_found
+from ..notifications import events
 from . import razorpay
 from . import refunds
 
@@ -165,6 +166,8 @@ async def confirm_payment(
 
         return {"paid": True, "orderStatus": "cancelled"}
 
+    await events.new_order(order_id)
+
     return {"paid": True, "orderStatus": "confirmed"}
 
 
@@ -203,6 +206,9 @@ async def handle_webhook(body: bytes, signature: str) -> dict:
         entity = payload.get("payload", {}).get("refund", {}).get("entity") or {}
         result = await refunds.apply_refund_webhook(event_type, entity)
 
+        if result.get("orderId") and event_type == "refund.processed":
+            await events.refund_processed(uuid.UUID(result["orderId"]))
+
         await execute(
             "update payment_webhook_events set processed_at = now() where provider = 'razorpay' and event_id = $1",
             event_id,
@@ -238,19 +244,24 @@ async def handle_webhook(body: bytes, signature: str) -> dict:
             payment["id"],
             razorpay_payment_id,
         )
-        await connection.execute(
+        # The new status, or None if the app's own confirmation got here first.
+        now_status = await connection.fetchval(
             """
             update orders
             set payment_status = 'paid',
                 status = case when status = 'pending' then 'confirmed' else status end,
                 confirmed_at = coalesce(confirmed_at, now())
             where id = $1 and payment_status not in ('paid', 'refunded')
+            returning status
             """,
             payment["order_id"],
         )
 
     # Same late-capture case as in confirm_payment, reached via the webhook.
     await refunds.refund_if_paid(payment["order_id"], "Paid after the order was cancelled", None)
+
+    if now_status == "confirmed":
+        await events.new_order(payment["order_id"])
 
     await execute(
         "update payment_webhook_events set processed_at = now() where provider = 'razorpay' and event_id = $1",
