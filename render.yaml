@@ -1,7 +1,7 @@
-# Render blueprint for the Foodos API.
+# Render blueprint for Foodos: the API, and the admin panel website.
 #
-# One service serves both apps: the customer app and the restaurant partner app
-# talk to the same API.
+# One API serves every app: the customer, restaurant and delivery apps and the
+# admin panel all talk to it.
 #
 # The database is not declared here: Neon's free tier keeps data when the
 # service sleeps, which Render's free Postgres deletes after 30 days. Paste
@@ -57,7 +57,54 @@ services:
       - key: RAZORPAY_WEBHOOK_SECRET
         sync: false
 
-      # Only the browser frontend needs this; the mobile apps do not send
-      # Origin headers and are unaffected.
+      # Websites allowed to call the API from a browser: the admin panel.
+      # The mobile apps send no Origin header and are unaffected. Add the
+      # admin panel's onrender.com address here once Render has created it.
       - key: CORS_ORIGINS
-        value: http://localhost:5173
+        value: http://localhost:5174
+
+  # The admin panel: a static website, free on Render and never asleep (only
+  # the API sleeps). Rebuilt only when something under admin/ changes.
+  - type: web
+    name: foodos-admin
+    runtime: static
+    branch: dev
+    buildCommand: cd admin && npm ci && npm run build
+    staticPublishPath: ./admin/dist
+    autoDeploy: true
+    buildFilter:
+      paths:
+        - admin/**
+    envVars:
+      # Baked into the build: where the panel finds the API.
+      - key: VITE_API_URL
+        value: https://foodos-api-x6mc.onrender.com
+    routes:
+      # Every page address (/orders/123, /riders...) is served the app, which
+      # then shows the right screen.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      # Only this site's own code may run, and it may only talk to the API and
+      # the map tiles. This is what keeps the stored sign-in safe from an
+      # injected script.
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://foodos-api-x6mc.onrender.com https://tiles.openfreemap.org; connect-src 'self' https://foodos-api-x6mc.onrender.com https://tiles.openfreemap.org; worker-src 'self' blob:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: no-referrer
+      - path: /*
+        name: X-Robots-Tag
+        value: noindex, nofollow
+      # File names carry a content hash, so they can be cached for good.
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
