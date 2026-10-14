@@ -67,7 +67,7 @@ export default function EditProfileScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top']}>
+    <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
       <Header onBack={() => router.back()} title="Edit profile" />
 
       <KeyboardAvoidingView

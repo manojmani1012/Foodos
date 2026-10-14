@@ -138,7 +138,7 @@ export default function OrderScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top']}>
+    <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
       <Header
         onBack={() => router.replace('/')}
         title={`Order #${order.orderNumber}`}

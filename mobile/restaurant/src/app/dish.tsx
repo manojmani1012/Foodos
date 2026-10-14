@@ -14,7 +14,7 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import {
   createCategory,
@@ -52,6 +52,8 @@ function cleanAddons(drafts: AddonDraft[]) {
 
 export default function DishEditorScreen() {
   const router = useRouter()
+  // Room for the phone's own navigation bar under the bottom buttons.
+  const insets = useSafeAreaInsets()
   const params = useLocalSearchParams<{ id?: string }>()
 
   // Set once the dish exists on the server. Starts as the route's id when
@@ -509,7 +511,7 @@ export default function DishEditorScreen() {
           ) : null}
         </ScrollView>
 
-        <View style={styles.footer}>
+        <View style={[styles.footer, { paddingBottom: space.lg + insets.bottom }]}>
           <Pressable
             style={[styles.primaryButton, !canSave && styles.disabled]}
             onPress={save}

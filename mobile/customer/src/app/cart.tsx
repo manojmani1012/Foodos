@@ -75,7 +75,7 @@ export default function CartScreen() {
       <Header onBack={() => router.back()} title="Your cart" subtitle={cart.restaurant?.name} />
 
       <ScrollView
-        contentContainerStyle={{ paddingBottom: 140 }}
+        contentContainerStyle={{ paddingBottom: 140 + insets.bottom }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >

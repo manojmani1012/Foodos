@@ -70,7 +70,7 @@ export default function DishScreen() {
     <SafeAreaView style={styles.screen} edges={['top']}>
       <Header onBack={() => router.back()} title={dish.name} subtitle={restaurant.name} />
 
-      <ScrollView contentContainerStyle={{ paddingBottom: 140 }} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 140 + insets.bottom }} showsVerticalScrollIndicator={false}>
         {dish.imageUrl ? (
           <Image
             source={{ uri: dish.imageUrl }}

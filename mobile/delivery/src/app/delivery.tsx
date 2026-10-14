@@ -11,7 +11,7 @@ import {
   Text,
   View,
 } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { ScreenHeader } from '@/components/ScreenHeader'
 import {
@@ -41,6 +41,8 @@ const PROGRESS: { status: Delivery['status']; label: string }[] = [
 
 export default function DeliveryScreen() {
   const router = useRouter()
+  // Room for the phone's own navigation bar under the bottom buttons.
+  const insets = useSafeAreaInsets()
 
   const [delivery, setDelivery] = useState<Delivery | null>(null)
   const [loading, setLoading] = useState(true)
@@ -170,7 +172,7 @@ export default function DeliveryScreen() {
   const stepIndex = PROGRESS.findIndex(entry => entry.status === delivery.status)
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top']}>
+    <SafeAreaView style={styles.screen} edges={next ? ['top'] : ['top', 'bottom']}>
       <ScreenHeader title={`Order #${delivery.orderNumber}`} subtitle={PROGRESS[stepIndex]?.label} />
 
       <ScrollView
@@ -252,7 +254,7 @@ export default function DeliveryScreen() {
       </ScrollView>
 
       {next ? (
-        <View style={styles.footer}>
+        <View style={[styles.footer, { paddingBottom: space.lg + insets.bottom }]}>
           {blocked ? (
             <Text style={styles.blockedHint}>
               The restaurant has not marked the food ready yet. This unlocks automatically when they do.

@@ -47,7 +47,7 @@ export default function EarningsScreen() {
   const activeDays = (earnings?.daily ?? []).filter(day => day.orders > 0).reverse()
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top']}>
+    <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
       <ScreenHeader title="Earnings" />
 
       <View style={styles.ranges}>

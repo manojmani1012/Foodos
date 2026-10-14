@@ -11,7 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { ScreenHeader } from '@/components/ScreenHeader'
 import { fetchRestaurant, shortTime, updateOutlet, type OutletChanges } from '@/lib/restaurant'
@@ -34,6 +34,8 @@ function normaliseTime(text: string): string | null {
 
 export default function OutletScreen() {
   const router = useRouter()
+  // Room for the phone's own navigation bar under the bottom buttons.
+  const insets = useSafeAreaInsets()
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -216,7 +218,7 @@ export default function OutletScreen() {
           <Text style={styles.hint}>{description.length}/300 · shown on your page</Text>
         </ScrollView>
 
-        <View style={styles.footer}>
+        <View style={[styles.footer, { paddingBottom: space.lg + insets.bottom }]}>
           <Pressable
             style={[styles.primaryButton, (!hoursValid || saving) && styles.disabled]}
             onPress={save}

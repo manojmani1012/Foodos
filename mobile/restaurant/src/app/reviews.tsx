@@ -41,7 +41,7 @@ export default function ReviewsScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.screen} edges={['top']}>
+      <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
         <ScreenHeader title="Ratings and reviews" />
         <View style={styles.centre}>
           <ActivityIndicator size="large" color={colors.brand} />
@@ -51,7 +51,7 @@ export default function ReviewsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top']}>
+    <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
       <ScreenHeader title="Ratings and reviews" />
 
       <FlatList

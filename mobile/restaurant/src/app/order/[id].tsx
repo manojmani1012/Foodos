@@ -12,7 +12,7 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import {
   acceptOrder,
@@ -40,6 +40,8 @@ const STATUS_LABEL: Record<string, string> = {
 export default function OrderDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
+  // Room for the phone's own navigation bar under the bottom buttons.
+  const insets = useSafeAreaInsets()
 
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -126,9 +128,10 @@ export default function OrderDetailScreen() {
 
   const isNew = order.status === 'confirmed'
   const isPreparing = order.status === 'preparing'
+  const hasFooter = !rejecting && (isNew || isPreparing)
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top']}>
+    <SafeAreaView style={styles.screen} edges={hasFooter ? ['top'] : ['top', 'bottom']}>
       <Header onBack={() => router.back()} title={`#${order.orderNumber}`} />
 
       <ScrollView contentContainerStyle={styles.content}>
@@ -244,8 +247,8 @@ export default function OrderDetailScreen() {
         ) : null}
       </ScrollView>
 
-      {!rejecting && (isNew || isPreparing) ? (
-        <View style={styles.footer}>
+      {hasFooter ? (
+        <View style={[styles.footer, { paddingBottom: space.lg + insets.bottom }]}>
           {isNew ? (
             <View style={styles.actionRow}>
               <Pressable

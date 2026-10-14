@@ -209,7 +209,7 @@ export default function RestaurantScreen() {
             <Text style={styles.emptyText}>This menu is empty right now</Text>
           </View>
         }
-        contentContainerStyle={{ paddingBottom: showCartBar ? 110 : space.xxl }}
+        contentContainerStyle={{ paddingBottom: (showCartBar ? 110 : space.xxl) + insets.bottom }}
       />
 
       {showCartBar && (
