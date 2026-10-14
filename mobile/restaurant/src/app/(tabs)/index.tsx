@@ -12,6 +12,8 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
+import { ApiError } from '@/lib/apiClient'
+import { useAuth } from '@/lib/AuthContext'
 import {
   fetchDashboard,
   fetchRestaurant,
@@ -26,8 +28,33 @@ import { colors, radius, shadow, space, type } from '@/theme'
 // notice a new order quickly, and the payload is a handful of integers.
 const POLL_MS = 15000
 
+// What an owner sees while their outlet is not live. Foodos (the admin panel)
+// decides these statuses; the owner cannot change them from the app.
+const STATUS_NOTICE: Record<string, { title: string; body: string }> = {
+  pending: {
+    title: 'Not live yet',
+    body: 'Foodos is setting up your restaurant. Add your dishes, prices and photos under Menu. Customers will see you once Foodos makes you live.',
+  },
+  suspended: {
+    title: 'Paused by Foodos',
+    body: 'Customers cannot see your restaurant right now. Contact Foodos support to find out why.',
+  },
+  rejected: {
+    title: 'Not approved',
+    body: 'Foodos has not approved this restaurant. Contact Foodos support if you think this is a mistake.',
+  },
+}
+
+function formatPhone(phone: string | null | undefined) {
+  const match = phone?.match(/^\+91(\d{5})(\d{5})$/)
+  return match ? `+91 ${match[1]} ${match[2]}` : phone || 'this number'
+}
+
 export default function TodayScreen() {
   const router = useRouter()
+  const { user, signOut } = useAuth()
+  // Signed in, but Foodos has not added a restaurant to this number yet.
+  const [notLinked, setNotLinked] = useState(false)
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null)
   const [counters, setCounters] = useState<Dashboard | null>(null)
   const [loading, setLoading] = useState(true)
@@ -41,8 +68,15 @@ export default function TodayScreen() {
 
       setRestaurant(place)
       setCounters(numbers)
+      setNotLinked(false)
       setError('')
     } catch (loadError: any) {
+      if (loadError instanceof ApiError && loadError.code === 'restaurant_not_found') {
+        setNotLinked(true)
+        setError('')
+        return
+      }
+
       setError(loadError.message || 'Could not load your dashboard')
     } finally {
       setLoading(false)
@@ -106,6 +140,44 @@ export default function TodayScreen() {
     )
   }
 
+  if (notLinked) {
+    return (
+      <SafeAreaView style={styles.screen} edges={['top']}>
+        <View style={styles.notLinked}>
+          <View style={styles.notLinkedIcon}>
+            <Feather name="home" size={28} color={colors.brand} />
+          </View>
+          <Text style={styles.notLinkedTitle}>Your restaurant is not set up yet</Text>
+          <Text style={styles.notLinkedBody}>
+            Foodos adds your restaurant to {formatPhone(user?.phone)}. Once it has been added, it appears here
+            and you can build your menu.
+          </Text>
+          <Pressable
+            style={[styles.primaryButton, refreshing && styles.statusRowBusy]}
+            disabled={refreshing}
+            onPress={async () => {
+              setRefreshing(true)
+              await load()
+              setRefreshing(false)
+            }}
+          >
+            {refreshing ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.primaryButtonText}>Check again</Text>
+            )}
+          </Pressable>
+          <Pressable style={styles.linkButton} onPress={signOut}>
+            <Text style={styles.linkButtonText}>Signed in with the wrong number? Sign out</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  const live = restaurant?.status === 'active'
+  const notice = restaurant && !live ? STATUS_NOTICE[restaurant.status] : null
+
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
       <View style={styles.header}>
@@ -132,9 +204,11 @@ export default function TodayScreen() {
               {restaurant?.isAcceptingOrders ? 'Accepting orders' : 'Closed'}
             </Text>
             <Text style={styles.statusHint}>
-              {restaurant?.isAcceptingOrders
-                ? 'Customers can order from you now'
-                : 'You are hidden from customers'}
+              {!live
+                ? 'Customers cannot see you until Foodos makes you live'
+                : restaurant?.isAcceptingOrders
+                  ? 'Customers can order from you now'
+                  : 'You are hidden from customers'}
             </Text>
           </View>
           <Switch on={!!restaurant?.isAcceptingOrders} />
@@ -156,6 +230,16 @@ export default function TodayScreen() {
         }
       >
         {error ? <Text style={styles.error}>{error}</Text> : null}
+
+        {notice ? (
+          <View style={styles.notice}>
+            <Feather name="info" size={18} color={colors.warning} />
+            <View style={styles.flex}>
+              <Text style={styles.noticeTitle}>{notice.title}</Text>
+              <Text style={styles.noticeBody}>{notice.body}</Text>
+            </View>
+          </View>
+        ) : null}
 
         <View style={styles.revenueCard}>
           <Text style={styles.revenueLabel}>Earned today</Text>
@@ -357,4 +441,40 @@ const styles = StyleSheet.create({
     ...type.small,
   },
   footnote: { ...type.caption, color: colors.muted, marginTop: space.xl, textAlign: 'center' },
+
+  notice: {
+    flexDirection: 'row',
+    gap: space.md,
+    marginBottom: space.lg,
+    padding: space.lg,
+    borderRadius: radius.md,
+    backgroundColor: colors.warningSoft,
+  },
+  noticeTitle: { ...type.bodyStrong, color: colors.warning },
+  noticeBody: { ...type.small, color: colors.body, marginTop: 2, lineHeight: 19 },
+
+  notLinked: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.xxl, gap: space.md },
+  notLinkedIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.brandSoft,
+    marginBottom: space.sm,
+  },
+  notLinkedTitle: { ...type.title, color: colors.ink, textAlign: 'center' },
+  notLinkedBody: { ...type.body, color: colors.body, textAlign: 'center', lineHeight: 22 },
+  primaryButton: {
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 52,
+    marginTop: space.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.brand,
+  },
+  primaryButtonText: { ...type.bodyStrong, color: '#fff' },
+  linkButton: { padding: space.md },
+  linkButtonText: { ...type.small, color: colors.brand, fontWeight: '600' },
 })
