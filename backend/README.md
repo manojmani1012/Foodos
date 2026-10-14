@@ -32,10 +32,10 @@ Migrations are applied once each and recorded in `schema_migrations`. Editing an
 applied migration makes the runner refuse to continue, so changes are made by
 adding a new file rather than rewriting history.
 
-Create the first admin (there is no admin sign-up screen):
+Create the first admin (there is no admin sign-up screen): it asks for the password at a hidden prompt. `--super` makes a super admin, for the business owner.
 
 ```powershell
-python -m db.create_admin admin@foodos.in "a strong password" "Your Name"
+python -m db.create_admin --email admin@foodos.in --name "Your Name" --super
 ```
 
 ## Run

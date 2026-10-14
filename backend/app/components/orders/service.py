@@ -375,6 +375,12 @@ async def get_order(user_id: uuid.UUID, order_id: str) -> dict:
     return await _order_response(identifier)
 
 
+async def order_view(order_id: uuid.UUID) -> dict:
+    """An order exactly as the customer sees it, for the admin panel to show
+    alongside its own details. The caller checks the order exists."""
+    return await _order_response(order_id)
+
+
 async def cancel_order(user_id: uuid.UUID, order_id: str, reason: Optional[str] = None) -> dict:
     try:
         identifier = uuid.UUID(order_id)

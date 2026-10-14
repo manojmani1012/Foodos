@@ -6,7 +6,8 @@ import asyncpg
 
 from ...config import get_settings
 from ...database import execute, fetchrow, transaction
-from ...errors import forbidden, unauthorized
+from ...errors import forbidden, too_many_requests, unauthorized
+from ..admin import audit
 from ..notifications.sms import otp_message, send_sms
 from .otp import consume_otp, create_otp
 from .passwords import DUMMY_HASH, verify_password
@@ -16,6 +17,14 @@ from .tokens import get_user_roles, issue_session, revoke_session, rotate_sessio
 # Roles a phone login may grant. Admin access is deliberately absent: it is only
 # ever handed out through the password login below, never by knowing a number.
 PHONE_LOGIN_ROLES = ["customer", "restaurant_owner", "delivery_partner"]
+
+# The admin login is on the public internet, so password guessing is slowed
+# down: a few wrong tries lock that email for a while, and one address trying
+# many emails is stopped too.
+ADMIN_LOGIN_WINDOW_MINUTES = 15
+ADMIN_LOGIN_MAX_FAILURES_PER_EMAIL = 5
+ADMIN_LOGIN_MAX_FAILURES_PER_IP = 20
+ADMIN_LOGIN_FAILED = "Admin sign-in failed"
 
 
 async def request_login_otp(raw_phone: str) -> dict[str, Any]:
@@ -119,6 +128,31 @@ async def verify_login_otp(
     }
 
 
+async def _check_admin_login_attempts(email: str, ip: Optional[str]) -> None:
+    failures = await fetchrow(
+        """
+        select count(*) filter (where metadata->>'email' = $1)::int as for_email,
+               count(*) filter (where $2::text is not null and host(ip) = $2)::int as for_ip
+        from audit_logs
+        where module = 'Auth' and action = $3
+          and created_at > now() - make_interval(mins => $4)
+        """,
+        email,
+        audit.valid_ip(ip),
+        ADMIN_LOGIN_FAILED,
+        ADMIN_LOGIN_WINDOW_MINUTES,
+    )
+
+    if (
+        failures["for_email"] >= ADMIN_LOGIN_MAX_FAILURES_PER_EMAIL
+        or failures["for_ip"] >= ADMIN_LOGIN_MAX_FAILURES_PER_IP
+    ):
+        raise too_many_requests(
+            "login_attempts_exceeded",
+            f"Too many wrong attempts. Try again in {ADMIN_LOGIN_WINDOW_MINUTES} minutes",
+        )
+
+
 async def login_with_password(
     email: str,
     password: str,
@@ -126,6 +160,8 @@ async def login_with_password(
     ip: Optional[str] = None,
 ) -> dict[str, Any]:
     normalized_email = str(email or "").strip().lower()
+
+    await _check_admin_login_attempts(normalized_email, ip)
 
     user = await fetchrow(
         """
@@ -145,6 +181,16 @@ async def login_with_password(
     password_matches = verify_password(password, stored_hash)
 
     if user is None or not password_matches:
+        await audit.record(
+            user["id"] if user else None,
+            ADMIN_LOGIN_FAILED,
+            "Auth",
+            "user",
+            user["id"] if user else None,
+            {"email": normalized_email},
+            ip,
+        )
+
         raise unauthorized("credentials_invalid", "Incorrect email or password")
 
     if user["status"] == "blocked":
@@ -158,6 +204,7 @@ async def login_with_password(
     role = "super_admin" if "super_admin" in roles else "admin"
 
     await execute("update users set last_login_at = now() where id = $1", user["id"])
+    await audit.record(user["id"], "Signed in", "Auth", "user", user["id"], {"email": normalized_email}, ip)
 
     session = await issue_session(None, user["id"], role, roles, user_agent, ip)
 

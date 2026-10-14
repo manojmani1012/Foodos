@@ -1,13 +1,14 @@
-"""Creates the first admin for the dashboard.
+"""Creates an admin panel account, or resets an existing one's password.
 
-There is no admin sign-up screen on purpose, so the only ways in are this script
-and an existing admin.
+    python -m db.create_admin --email ops@foodos.in --name "Priya Sharma"
+    python -m db.create_admin --email owner@foodos.in --name "Owner" --super
 
-    python -m db.create_admin you@example.com "a strong password" "Your Name"
-
-Leave the password off and it is asked for, which keeps it out of shell history.
+The password is typed at a hidden prompt, never passed on the command line,
+so it does not end up in shell history or in anyone's screenshot. Run it
+against the live database by pointing DATABASE_URL at it first.
 """
 
+import argparse
 import asyncio
 import getpass
 import sys
@@ -23,25 +24,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.components.auth.passwords import hash_password  # noqa: E402
 from app.config import get_settings  # noqa: E402
 
+MIN_PASSWORD_LENGTH = 10
 
-async def main() -> None:
-    args = sys.argv[1:]
-    email = (args[0] if args else "").strip().lower()
 
-    if "@" not in email:
-        raise RuntimeError('Usage: python -m db.create_admin <email> [password] ["full name"]')
+def ask_password() -> str:
+    while True:
+        password = getpass.getpass(f"Password (at least {MIN_PASSWORD_LENGTH} characters, hidden as you type): ")
 
-    password = args[1] if len(args) > 1 else getpass.getpass("Password (at least 8 characters): ")
-    full_name = args[2] if len(args) > 2 else "Admin"
+        if len(password) < MIN_PASSWORD_LENGTH:
+            print(f"Too short. Use at least {MIN_PASSWORD_LENGTH} characters.")
+            continue
 
-    if not password or len(password) < 8:
-        raise RuntimeError("Password must be at least 8 characters")
+        if password.isdigit() or password.isalpha():
+            print("Mix letters with numbers or symbols.")
+            continue
 
-    password_hash = hash_password(password)
+        if getpass.getpass("Type it again: ") != password:
+            print("The two did not match. Try again.")
+            continue
+
+        return password
+
+
+async def create_admin(email: str, name: str, super_admin: bool) -> None:
     settings = get_settings()
 
     if not settings.database_url:
         raise RuntimeError("DATABASE_URL is not configured")
+
+    email = email.strip().lower()
+    role = "super_admin" if super_admin else "admin"
+    password_hash = hash_password(ask_password())
 
     connection = await asyncpg.connect(dsn=settings.database_url)
 
@@ -49,42 +62,54 @@ async def main() -> None:
         async with connection.transaction():
             existing = await connection.fetchrow("select id from users where email = $1", email)
 
-            if existing is not None:
-                user_id = existing["id"]
-                await connection.execute(
-                    "update users set password_hash = $1, status = 'active' where id = $2",
-                    password_hash,
-                    user_id,
-                )
-                print(f"Updated the password for {email}")
-            else:
+            if existing is None:
                 user_id = await connection.fetchval(
-                    """
-                    insert into users (email, full_name, password_hash)
-                    values ($1, $2, $3) returning id
-                    """,
+                    "insert into users (email, full_name, password_hash) values ($1, $2, $3) returning id",
                     email,
-                    full_name,
+                    name.strip(),
                     password_hash,
                 )
                 print(f"Created {email}")
+            else:
+                user_id = existing["id"]
+                await connection.execute(
+                    "update users set password_hash = $2, full_name = coalesce(full_name, $3), status = 'active' where id = $1",
+                    user_id,
+                    password_hash,
+                    name.strip(),
+                )
+                # A new password ends every session signed in with the old one.
+                await connection.execute(
+                    "update refresh_tokens set revoked_at = now() where user_id = $1 and revoked_at is null",
+                    user_id,
+                )
+                print(f"Updated the password for {email}")
 
             await connection.execute(
-                """
-                insert into user_roles (user_id, role) values ($1, 'super_admin')
-                on conflict do nothing
-                """,
-                user_id,
+                "insert into user_roles (user_id, role) values ($1, $2) on conflict do nothing", user_id, role
             )
-
-        print(f"{email} can now sign in to the admin dashboard (user {user_id}).")
     finally:
         await connection.close()
+
+    print(f"{email} can now sign in to the admin panel ({role.replace('_', ' ')}).")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Create a Foodos admin panel account")
+    parser.add_argument("--email", required=True)
+    parser.add_argument("--name", required=True)
+    parser.add_argument("--super", action="store_true", help="a super admin, for the business owner")
+    args = parser.parse_args()
+
+    asyncio.run(create_admin(args.email, args.name, args.super))
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        main()
+    except KeyboardInterrupt:
+        print("\nCancelled. Nothing was changed.")
+        sys.exit(1)
     except Exception as error:  # noqa: BLE001 - top-level CLI reporting
         print(error)
         sys.exit(1)
