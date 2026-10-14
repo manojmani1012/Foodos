@@ -22,3 +22,5 @@ venv/
 
 # Runtime files written by the start scripts
 .frontend.pid
+# Admin panel build output
+admin/dist/

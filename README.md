@@ -84,9 +84,35 @@ The Vite frontend serves all portals from one development server:
 | `http://localhost:5173/` | Customer App |
 | `http://localhost:5173/delivery` | Delivery Partner App |
 | `http://localhost:5173/restaurant` | Restaurant Partner App |
-| `http://localhost:5173/admin` | Admin Dashboard |
+| `http://localhost:5173/admin` | Admin Dashboard mock-up (superseded by the real panel in `admin/`) |
 
 The Customer, Delivery Partner, and Restaurant Partner portals use a mobile-sized preview. The Admin Dashboard uses the full browser width.
+
+## Admin Panel
+
+The working admin panel is its own website in `admin/` (React, TypeScript, Vite), backed by the
+`/api/v1/admin` routes. It covers the dashboard (live orders, stuck orders, failed refunds),
+orders (cancel, retry a refund), restaurant onboarding and going live, rider approval, customers
+(block / unblock), offers, partner payouts, and an activity log of every change.
+
+Sign-in is email and password, with no sign-up screen. Create an account from `backend/`; the
+password is asked for at a hidden prompt:
+
+```powershell
+python -m db.create_admin --email ops@example.com --name "Your Name" --super
+```
+
+Run it locally against the API on port 4000:
+
+```powershell
+cd admin
+npm install
+npm run dev        # http://localhost:5174
+```
+
+It is deployed as a free Render static site (`foodos-admin` in `render.yaml`), built with
+`VITE_API_URL` pointing at the API. The site's address must be listed in the API's
+`CORS_ORIGINS`, or the browser blocks its requests.
 
 ## Technology Requirements
 
@@ -144,6 +170,8 @@ food/
 │           ├── delivery-partner/
 │           ├── restaurant-partner/
 │           └── admin/
+├── admin/                  Admin panel website (React + TypeScript)
+│   └── src/
 ├── backend/
 │   ├── requirements.txt
 │   ├── pytest.ini
@@ -291,10 +319,10 @@ Migrations are applied once each and recorded in a `schema_migrations` table.
 Edit an applied migration and the runner refuses to continue, so changes are
 made by adding a new file rather than rewriting history.
 
-Create the first admin for the dashboard (there is no admin sign-up screen):
+Create the first admin for the dashboard (there is no admin sign-up screen): it asks for the password at a hidden prompt. `--super` makes a super admin, for the business owner.
 
 ```powershell
-python -m db.create_admin admin@foodos.in "a strong password" "Your Name"
+python -m db.create_admin --email admin@foodos.in --name "Your Name" --super
 ```
 
 Run the API:
