@@ -24,3 +24,7 @@ venv/
 .frontend.pid
 # Admin panel build output
 admin/dist/
+
+# Firebase app config: supplied to builds as a secret, not kept in the public repo
+google-services.json
+GoogleService-Info.plist

@@ -144,6 +144,22 @@ jobs:
           echo "::error::$URL/health did not respond after about four minutes. On Render, check the service is deployed and running. On a Cloudflare tunnel, check it is still running on your machine - its address changes every restart. Then update the EXPO_PUBLIC_API_URL setting, or type the current address into the box when starting this run."
           exit 1
 
+      # Firebase's config for Android push notifications. One file covers all
+      # three apps (Firebase picks the entry matching each package name). It
+      # is a secret rather than a file in this public repo; without it the APK
+      # still builds and works, just without push notifications.
+      - name: Add the Firebase config
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > google-services.json
+            echo "Firebase config added: push notifications are on."
+          else
+            echo "::warning::The GOOGLE_SERVICES_JSON secret is not set, so this APK has no push notifications."
+          fi
+        working-directory: mobile/${{ matrix.app }}
+
       - name: Generate the native project
         env:
           EXPO_PUBLIC_API_URL: ${{ steps.api.outputs.url }}

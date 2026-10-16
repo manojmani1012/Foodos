@@ -54,6 +54,12 @@
           "cameraPermission": "Foodos Partner uses the camera so you can photograph your dishes for your menu.",
           "microphonePermission": false
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#1a5c35"
+        }
       ]
     ],
     "experiments": {

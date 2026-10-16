@@ -54,6 +54,12 @@
         {
           "locationWhenInUsePermission": "Foodos Delivery uses your location while the app is open to show how far each pickup is and to let customers follow their order."
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#1a5c35"
+        }
       ]
     ],
     "experiments": {

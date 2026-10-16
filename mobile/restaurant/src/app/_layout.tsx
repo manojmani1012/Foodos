@@ -5,6 +5,7 @@ import { useEffect } from 'react'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 
 import { AuthProvider, useAuth } from '@/lib/AuthContext'
+import { PushNotifications } from '@/lib/PushNotifications'
 
 // Hold the splash until we know whether this owner is already signed in, so a
 // returning user never sees the login screen flash before the dashboard.
@@ -34,6 +35,7 @@ export default function RootLayout() {
         <SplashGate>
           <StatusBar style="light" />
           <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
+          <PushNotifications />
         </SplashGate>
       </AuthProvider>
     </SafeAreaProvider>

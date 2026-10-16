@@ -1,6 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { api, saveSession } from './apiClient'
+import { ApiError, api, saveSession } from './apiClient'
 import { clearSession, getRefreshToken, getStoredUser, type StoredUser } from './tokenStorage'
+
+import { forgetPushToken } from '@/lib/pushToken'
 
 type AuthValue = {
   user: StoredUser | null
@@ -52,12 +54,20 @@ export function AuthProvider({ role, children }: { role: string; children: React
           setUser(current)
           setStatus('signed-in')
         }
-      } catch {
-        await clearSession()
+      } catch (error) {
+        // Only the server saying no ends the session. No signal, or the API
+        // still waking up, keeps it: the screens retry once the network is back.
+        const refused = error instanceof ApiError && (error.status === 401 || error.status === 403)
 
-        if (!cancelled) {
-          setUser(null)
-          setStatus('signed-out')
+        if (refused || !stored) {
+          if (refused) await clearSession()
+
+          if (!cancelled) {
+            setUser(null)
+            setStatus('signed-out')
+          }
+        } else if (!cancelled) {
+          setStatus('signed-in')
         }
       }
     }
@@ -90,6 +100,7 @@ export function AuthProvider({ role, children }: { role: string; children: React
   )
 
   const signOut = useCallback(async () => {
+    await forgetPushToken()
     await api.logout()
     setUser(null)
     setStatus('signed-out')
