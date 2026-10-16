@@ -137,6 +137,8 @@ export default function OrderScreen() {
     }
   }
 
+  const itemCount = order.items.reduce((sum, item) => sum + item.quantity, 0)
+
   return (
     <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
       <Header
@@ -238,7 +240,7 @@ export default function OrderScreen() {
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>
-            {order.items.reduce((sum, item) => sum + item.quantity, 0)} items
+            {itemCount} item{itemCount === 1 ? '' : 's'}
           </Text>
 
           {order.items.map(item => (

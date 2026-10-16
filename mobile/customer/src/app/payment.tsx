@@ -3,7 +3,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { WebView } from 'react-native-webview'
 
 import {
   confirmPayment,
@@ -11,70 +10,9 @@ import {
   startPayment,
   type PaymentIntent,
 } from '@/lib/orders'
+import { RazorpayCheckout } from '@/components/RazorpayCheckout'
+import type { CheckoutMessage } from '@/components/RazorpayCheckout.types'
 import { colors, radius, shadow, space, type } from '@/theme'
-
-// Razorpay's checkout is a web widget. Loading it in a WebView keeps payments
-// working inside Expo Go; their native SDK needs a development build, and the
-// server side is identical either way.
-function checkoutHtml(intent: PaymentIntent): string {
-  const customer = intent.customer
-
-  return `<!doctype html>
-<html>
-  <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <style>
-      html, body { margin: 0; height: 100%; background: #f4f6f5; font-family: system-ui, sans-serif; }
-      .waiting { display: flex; height: 100%; align-items: center; justify-content: center; color: #8a9299; }
-    </style>
-    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-  </head>
-  <body>
-    <div class="waiting">Opening secure checkout…</div>
-    <script>
-      function send(message) {
-        window.ReactNativeWebView.postMessage(JSON.stringify(message));
-      }
-
-      var options = {
-        key: ${JSON.stringify(intent.keyId)},
-        amount: ${intent.amountPaise},
-        currency: ${JSON.stringify(intent.currency)},
-        order_id: ${JSON.stringify(intent.razorpayOrderId)},
-        name: 'Foodos',
-        description: 'Order #' + ${JSON.stringify(intent.orderNumber)},
-        theme: { color: '#1a5c35' },
-        prefill: {
-          name: ${JSON.stringify(customer.name || '')},
-          contact: ${JSON.stringify(customer.phone || '')},
-          email: ${JSON.stringify(customer.email || '')}
-        },
-        handler: function (response) {
-          send({
-            type: 'success',
-            razorpayOrderId: response.razorpay_order_id,
-            razorpayPaymentId: response.razorpay_payment_id,
-            razorpaySignature: response.razorpay_signature
-          });
-        },
-        modal: {
-          ondismiss: function () { send({ type: 'dismissed' }); }
-        }
-      };
-
-      try {
-        var rzp = new Razorpay(options);
-        rzp.on('payment.failed', function (response) {
-          send({ type: 'failed', reason: (response.error && response.error.description) || 'Payment failed' });
-        });
-        rzp.open();
-      } catch (error) {
-        send({ type: 'failed', reason: String(error) });
-      }
-    </script>
-  </body>
-</html>`
-}
 
 type Stage = 'preparing' | 'checkout' | 'verifying' | 'failed'
 
@@ -175,43 +113,21 @@ export default function PaymentScreen() {
     setStage('failed')
   }
 
+  function onCheckoutMessage(message: CheckoutMessage) {
+    if (message.type === 'success') onSuccess(message)
+    else if (message.type === 'dismissed') onDismissed()
+    else {
+      settled.current = true
+      setError(message.reason || 'Payment failed')
+      setStage('failed')
+      settled.current = false
+    }
+  }
+
   if (stage === 'checkout' && intent) {
     return (
       <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
-        <WebView
-          source={{ html: checkoutHtml(intent), baseUrl: 'https://checkout.razorpay.com' }}
-          originWhitelist={['*']}
-          javaScriptEnabled
-          domStorageEnabled
-          startInLoadingState
-          renderLoading={() => (
-            <View style={styles.centered}>
-              <ActivityIndicator size="large" color={colors.brand} />
-            </View>
-          )}
-          onMessage={event => {
-            let message: any
-
-            try {
-              message = JSON.parse(event.nativeEvent.data)
-            } catch {
-              return
-            }
-
-            if (message.type === 'success') onSuccess(message)
-            else if (message.type === 'dismissed') onDismissed()
-            else if (message.type === 'failed') {
-              settled.current = true
-              setError(message.reason || 'Payment failed')
-              setStage('failed')
-              settled.current = false
-            }
-          }}
-          onError={() => {
-            setError('Could not load the payment page')
-            setStage('failed')
-          }}
-        />
+        <RazorpayCheckout intent={intent} onMessage={onCheckoutMessage} />
       </SafeAreaView>
     )
   }

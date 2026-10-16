@@ -27,8 +27,13 @@
       ]
     },
     "web": {
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "output": "single",
+      "favicon": "./assets/images/favicon.png",
+      "name": "Foodos: Order food online",
+      "shortName": "Foodos",
+      "description": "Order from restaurants near you and track your delivery live.",
+      "themeColor": "#1a5c35",
+      "backgroundColor": "#f4f6f5"
     },
     "plugins": [
       "expo-router",
@@ -53,6 +58,12 @@
         "expo-location",
         {
           "locationWhenInUsePermission": "Foodos uses your location only when you choose to pin a delivery address, so the delivery partner can find your door."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#1a5c35"
         }
       ]
     ],

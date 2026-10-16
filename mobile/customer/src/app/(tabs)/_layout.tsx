@@ -26,6 +26,9 @@ export default function TabLayout() {
           paddingBottom: 8 + insets.bottom,
         },
         tabBarLabelStyle: { ...type.caption, fontWeight: '600' },
+        // On screens 768px and wider the library puts labels beside the
+        // icons, which does not fit the website's phone-width column.
+        tabBarLabelPosition: 'below-icon',
       }}
     >
       <Tabs.Screen

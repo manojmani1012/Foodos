@@ -85,7 +85,12 @@ async function performRefresh(): Promise<string> {
   const body = await parseBody(response)
 
   if (!response.ok) {
-    await clearSession()
+    // Refused (expired, revoked, blocked): the session is over. A server
+    // error, such as the API still waking up, says nothing about the session.
+    if (response.status === 401 || response.status === 403) {
+      await clearSession()
+    }
+
     throw new ApiError(response.status, body)
   }
 
@@ -141,6 +146,13 @@ async function send(path: string, options: RequestOptions = {}) {
 
 export async function request(path: string, options: RequestOptions = {}) {
   const { auth = true, retryOnExpiry = true } = options
+
+  // The access token lives in memory only, so it is gone after the app
+  // restarts (or the page reloads). Renew it from the stored refresh token
+  // before the first call, rather than sending none and being told to sign in.
+  if (auth && retryOnExpiry && !options.accessToken && !getAccessToken() && (await getRefreshToken())) {
+    await refreshOnce()
+  }
 
   try {
     return await send(path, options)

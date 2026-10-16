@@ -4,7 +4,9 @@ import { StatusBar } from 'expo-status-bar'
 import { useEffect } from 'react'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 
+import { WebFrame } from '@/components/WebFrame'
 import { AuthProvider, useAuth } from '@/lib/AuthContext'
+import { PushNotifications } from '@/lib/PushNotifications'
 import { CartProvider } from '@/lib/CartContext'
 import { DishProvider } from '@/lib/DishContext'
 import { LocationProvider } from '@/lib/LocationContext'
@@ -39,8 +41,11 @@ export default function RootLayout() {
             <CartProvider>
               <DishProvider>
                 <SplashGate>
-                  <StatusBar style="dark" />
-                  <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
+                  <WebFrame>
+                    <StatusBar style="dark" />
+                    <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }} />
+                    <PushNotifications />
+                  </WebFrame>
                 </SplashGate>
               </DishProvider>
             </CartProvider>

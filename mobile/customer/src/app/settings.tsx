@@ -2,10 +2,11 @@ import { Feather } from '@expo/vector-icons'
 import * as WebBrowser from 'expo-web-browser'
 import { useRouter } from 'expo-router'
 import { useState } from 'react'
-import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native'
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { useAuth } from '@/lib/AuthContext'
+import { confirmAction, tell } from '@/lib/confirm'
 import { useThemePreference, type ThemeChoice } from '@/lib/ThemeContext'
 import { deleteAccount } from '@/lib/profile'
 import { colors, radius, shadow, space, type } from '@/theme'
@@ -23,28 +24,28 @@ export default function SettingsScreen() {
   const { signOut } = useAuth()
   const theme = useThemePreference()
 
-  const [orderUpdates, setOrderUpdates] = useState(true)
-  const [offers, setOffers] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
   // Two steps, because this cannot be undone.
-  function confirmDelete() {
-    Alert.alert(
-      'Delete your account?',
-      'Your saved addresses, favourites and personal details are removed. Past orders stay with the restaurants as their sales records, but are no longer linked to you.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () =>
-            Alert.alert('This cannot be undone', 'Delete your Foodos account permanently?', [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Delete for ever', style: 'destructive', onPress: remove },
-            ]),
-        },
-      ],
-    )
+  async function confirmDelete() {
+    const first = await confirmAction({
+      title: 'Delete your account?',
+      message:
+        'Your saved addresses, favourites and personal details are removed. Past orders stay with the restaurants as their sales records, but are no longer linked to you.',
+      confirmText: 'Delete',
+      destructive: true,
+    })
+
+    if (!first) return
+
+    const second = await confirmAction({
+      title: 'This cannot be undone',
+      message: 'Delete your Foodos account permanently?',
+      confirmText: 'Delete for ever',
+      destructive: true,
+    })
+
+    if (second) await remove()
   }
 
   async function remove() {
@@ -55,7 +56,7 @@ export default function SettingsScreen() {
       await signOut()
       router.replace('/login')
     } catch (error: any) {
-      Alert.alert('Could not delete', error.message || 'Please try again')
+      tell('Could not delete', error.message || 'Please try again')
       setDeleting(false)
     }
   }
@@ -98,39 +99,23 @@ export default function SettingsScreen() {
           </Text>
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Notifications</Text>
-
-          <View style={styles.toggleRow}>
-            <View style={styles.flex}>
-              <Text style={styles.toggleLabel}>Order updates</Text>
-              <Text style={styles.toggleHint}>When your order is accepted, ready or delivered</Text>
-            </View>
-            <Switch
-              value={orderUpdates}
-              onValueChange={setOrderUpdates}
-              trackColor={{ true: colors.brand, false: colors.lineStrong }}
-              thumbColor={colors.surface}
-            />
+        {/* Which notifications arrive, and how loudly, is the phone's own
+            setting: Android lists "Order updates" there as its own category.
+            The website has no notifications, so it has no card. */}
+        {Platform.OS !== 'web' ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Notifications</Text>
+            <Text style={styles.cardHint}>
+              Foodos tells you when your order is accepted, picked up, at your door and delivered, and about any
+              cancellation or refund.
+            </Text>
+            <Pressable style={styles.row} onPress={() => Linking.openSettings()}>
+              <Feather name="bell" size={18} color={colors.body} />
+              <Text style={styles.rowLabel}>Turn notifications on or off</Text>
+              <Feather name="external-link" size={16} color={colors.faint} />
+            </Pressable>
           </View>
-
-          <View style={[styles.toggleRow, styles.toggleDivider]}>
-            <View style={styles.flex}>
-              <Text style={styles.toggleLabel}>Offers and promotions</Text>
-              <Text style={styles.toggleHint}>Discounts from restaurants near you</Text>
-            </View>
-            <Switch
-              value={offers}
-              onValueChange={setOffers}
-              trackColor={{ true: colors.brand, false: colors.lineStrong }}
-              thumbColor={colors.surface}
-            />
-          </View>
-
-          {/* Honest about what these do today: the preference is saved, but
-              nothing sends push messages until Firebase is connected. */}
-          <Text style={styles.hint}>Push notifications are not connected yet.</Text>
-        </View>
+        ) : null}
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>About</Text>
@@ -225,15 +210,7 @@ const styles = StyleSheet.create({
   themeLabel: { ...type.caption, color: colors.body, fontWeight: '600' },
   themeLabelActive: { color: colors.surface },
 
-  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, paddingVertical: space.sm },
-  toggleDivider: {
-    marginTop: space.sm,
-    paddingTop: space.md,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.line,
-  },
-  toggleLabel: { ...type.bodyStrong, color: colors.ink },
-  toggleHint: { ...type.caption, color: colors.muted, marginTop: 1 },
+  cardHint: { ...type.caption, color: colors.muted, marginTop: 1 },
 
   row: { flexDirection: 'row', alignItems: 'center', gap: space.md, paddingVertical: space.md },
   rowDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line },

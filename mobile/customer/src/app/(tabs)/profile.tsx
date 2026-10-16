@@ -1,10 +1,11 @@
 import { Feather } from '@expo/vector-icons'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useState } from 'react'
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { useAuth } from '@/lib/AuthContext'
+import { confirmAction } from '@/lib/confirm'
 import { useLocation } from '@/lib/LocationContext'
 import { fetchProfile, type Profile } from '@/lib/profile'
 import { colors, radius, shadow, space, type } from '@/theme'
@@ -37,19 +38,19 @@ export default function ProfileScreen() {
 
   // Confirmed, not instant: signing out by mis-tapping an avatar is how the
   // previous version behaved and it was far too easy to do by accident.
-  function confirmSignOut() {
-    Alert.alert('Sign out?', 'You will need your phone number and an OTP to sign back in.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign out',
-        style: 'destructive',
-        onPress: async () => {
-          setSigningOut(true)
-          await signOut()
-          router.replace('/login')
-        },
-      },
-    ])
+  async function confirmSignOut() {
+    const sure = await confirmAction({
+      title: 'Sign out?',
+      message: 'You will need your phone number and an OTP to sign back in.',
+      confirmText: 'Sign out',
+      destructive: true,
+    })
+
+    if (!sure) return
+
+    setSigningOut(true)
+    await signOut()
+    router.replace('/login')
   }
 
   const rows: Row[] = [
