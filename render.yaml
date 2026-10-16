@@ -60,10 +60,9 @@ services:
       # Websites allowed to call the API from a browser: the admin panel and
       # the customer website. The mobile apps send no Origin header and are
       # unaffected. (Local development allows localhost by itself.)
-      # foodos-web.onrender.com belongs to someone else: add the address Render
-      # actually gives the customer website once it exists.
+      # (foodos-web.onrender.com belongs to someone else; ours has a suffix.)
       - key: CORS_ORIGINS
-        value: https://foodos-admin.onrender.com
+        value: https://foodos-admin.onrender.com,https://foodos-web-2qyo.onrender.com
 
   # The admin panel: a static website, free on Render and never asleep (only
   # the API sleeps). Rebuilt only when something under admin/ changes.
