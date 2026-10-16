@@ -57,11 +57,11 @@ services:
       - key: RAZORPAY_WEBHOOK_SECRET
         sync: false
 
-      # Websites allowed to call the API from a browser: the admin panel.
-      # The mobile apps send no Origin header and are unaffected. (Local
-      # development allows localhost by itself, so it is not listed here.)
+      # Websites allowed to call the API from a browser: the admin panel and
+      # the customer website. The mobile apps send no Origin header and are
+      # unaffected. (Local development allows localhost by itself.)
       - key: CORS_ORIGINS
-        value: https://foodos-admin.onrender.com
+        value: https://foodos-admin.onrender.com,https://foodos-web.onrender.com
 
   # The admin panel: a static website, free on Render and never asleep (only
   # the API sleeps). Rebuilt only when something under admin/ changes.
@@ -106,5 +106,56 @@ services:
         value: noindex, nofollow
       # File names carry a content hash, so they can be cached for good.
       - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+
+  # The customer website: the customer app, built for browsers from the same
+  # code (mobile/customer). Free on Render and never asleep; rebuilt only when
+  # the customer app changes.
+  - type: web
+    name: foodos-web
+    runtime: static
+    branch: dev
+    buildCommand: cd mobile/customer && npm ci && npx expo export --platform web --output-dir dist
+    staticPublishPath: ./mobile/customer/dist
+    autoDeploy: true
+    buildFilter:
+      paths:
+        - mobile/customer/**
+    envVars:
+      # Baked into the build: where the website finds the API.
+      - key: EXPO_PUBLIC_API_URL
+        value: https://foodos-api-x6mc.onrender.com
+      - key: NODE_VERSION
+        value: "22"
+    routes:
+      # Every page address (/restaurant/..., /order/...) is served the app,
+      # which then shows the right screen.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      # Only this site's code, Razorpay's checkout and the map library may run;
+      # the site may only talk to the API, the map tiles and Razorpay. This is
+      # what keeps the stored sign-in safe from an injected script.
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; script-src 'self' https://*.razorpay.com https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: blob: https://foodos-api-x6mc.onrender.com https://tiles.openfreemap.org https://*.razorpay.com; connect-src 'self' https://foodos-api-x6mc.onrender.com https://tiles.openfreemap.org https://*.razorpay.com; frame-src https://*.razorpay.com; worker-src 'self' blob:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self' https://*.razorpay.com; frame-ancestors 'none'"
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      # Location is asked for only when the customer taps "Use my current
+      # location"; nothing else is ever requested.
+      - path: /*
+        name: Permissions-Policy
+        value: geolocation=(self), camera=(), microphone=()
+      # File names carry a content hash, so they can be cached for good.
+      - path: /_expo/*
         name: Cache-Control
         value: public, max-age=31536000, immutable
