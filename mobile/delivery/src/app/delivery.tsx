@@ -4,16 +4,22 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { ScreenHeader } from '@/components/ScreenHeader'
+import { SwipeButton } from '@/components/SwipeButton'
+import { ApiError } from '@/lib/apiClient'
 import {
   advance,
   call,
@@ -29,15 +35,16 @@ import { useLocationSharing } from '@/lib/LocationSharing'
 import { colors, radius, shadow, space, type } from '@/theme'
 
 // While waiting at the restaurant, check whether the kitchen has marked the
-// food ready, so the Picked up button unlocks without a manual refresh.
+// food ready, so the Picked up swipe unlocks without a manual refresh.
 const WAIT_POLL_MS = 10000
 
-const PROGRESS: { status: Delivery['status']; label: string }[] = [
-  { status: 'accepted', label: 'Going to restaurant' },
-  { status: 'reached_restaurant', label: 'At restaurant' },
-  { status: 'picked_up', label: 'Going to customer' },
-  { status: 'arrived', label: 'At customer' },
-]
+// Pickup and delivery are two separate screens, as on Swiggy and Zomato, so a
+// rider always knows which half of the trip they are on, and each step is a
+// deliberate swipe. Testers tapping one button two or three times had marked
+// orders delivered that were still in the bag.
+const PICKUP = new Set<Delivery['status']>(['accepted', 'reached_restaurant'])
+
+type Blocked = { title: string; body: string }
 
 export default function DeliveryScreen() {
   const router = useRouter()
@@ -49,6 +56,8 @@ export default function DeliveryScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [blocked, setBlocked] = useState<Blocked | null>(null)
+  const [code, setCode] = useState('')
   const [finished, setFinished] = useState<{ earningPaise: number; orderNumber: string } | null>(null)
 
   const load = useCallback(async () => {
@@ -69,8 +78,7 @@ export default function DeliveryScreen() {
   // Keep the customer's view of the rider current for the whole trip.
   useLocationSharing(!!delivery)
 
-  const waitingForFood =
-    !!delivery && !delivery.foodReady && (delivery.status === 'accepted' || delivery.status === 'reached_restaurant')
+  const waitingForFood = !!delivery && !delivery.foodReady && PICKUP.has(delivery.status)
 
   useEffect(() => {
     if (!waitingForFood) return
@@ -89,7 +97,7 @@ export default function DeliveryScreen() {
     setError('')
 
     try {
-      const updated = await advance(delivery.id, next.action, cashCollected)
+      const updated = await advance(delivery.id, next.action, { cashCollected, code })
 
       if (updated) {
         setDelivery(updated)
@@ -98,7 +106,24 @@ export default function DeliveryScreen() {
         setDelivery(null)
       }
     } catch (stepError: any) {
-      setError(stepError.message || 'Could not update the delivery')
+      const codeOf = stepError instanceof ApiError ? stepError.code : ''
+
+      if (codeOf === 'too_far') {
+        setBlocked({
+          title:
+            next.action === 'reached'
+              ? 'You seem to be far away from the pickup location'
+              : "You seem to be far away from the customer's location",
+          body: stepError.message.split('. ').slice(1).join('. ') || 'Try moving closer to update the status.',
+        })
+      } else if (codeOf === 'location_needed') {
+        setBlocked({ title: 'Location is off', body: stepError.message })
+      } else {
+        setError(stepError.message || 'Could not update the delivery')
+      }
+
+      if (codeOf === 'code_wrong' || codeOf === 'code_locked') setCode('')
+
       // The order may have moved on (the restaurant marked it ready, say).
       await load()
     } finally {
@@ -106,7 +131,7 @@ export default function DeliveryScreen() {
     }
   }
 
-  function onPrimary() {
+  function onSwipe() {
     if (!delivery || delivery.status === 'delivered') return
 
     const next = NEXT_STEP[delivery.status]
@@ -166,109 +191,171 @@ export default function DeliveryScreen() {
     )
   }
 
-  const atRestaurant = delivery.status === 'accepted' || delivery.status === 'reached_restaurant'
+  const pickup = PICKUP.has(delivery.status)
   const next = delivery.status === 'delivered' ? null : NEXT_STEP[delivery.status]
-  const blocked = next?.action === 'picked-up' && !delivery.foodReady
-  const stepIndex = PROGRESS.findIndex(entry => entry.status === delivery.status)
+  const foodNotReady = next?.action === 'picked-up' && !delivery.foodReady
+  const needsCode = next?.action === 'delivered' && delivery.codeRequired && code.length !== 4
+  const swipeLocked = foodNotReady || needsCode
 
   return (
     <SafeAreaView style={styles.screen} edges={next ? ['top'] : ['top', 'bottom']}>
-      <ScreenHeader title={`Order #${delivery.orderNumber}`} subtitle={PROGRESS[stepIndex]?.label} />
+      <ScreenHeader title={pickup ? 'Pick up the order' : 'Deliver the order'} subtitle={`Order #${delivery.orderNumber}`} />
 
-      <ScrollView
-        contentContainerStyle={styles.content}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={async () => {
-              setRefreshing(true)
-              await load()
-              setRefreshing(false)
-            }}
-            tintColor={colors.brand}
-          />
-        }
-      >
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-
-        <View style={styles.progress}>
-          {PROGRESS.map((entry, index) => (
-            <View key={entry.status} style={[styles.progressBar, index <= stepIndex && styles.progressBarDone]} />
-          ))}
-        </View>
-
-        {delivery.collectPaise > 0 ? (
-          <View style={styles.cash}>
-            <Feather name="dollar-sign" size={18} color={colors.warning} />
-            <Text style={styles.cashText}>
-              Cash order: collect <Text style={styles.cashAmount}>{formatRupees(delivery.collectPaise)}</Text> from the
-              customer
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.paid}>
-            <Feather name="check-circle" size={16} color={colors.brandInk} />
-            <Text style={styles.paidText}>Prepaid: do not collect any money</Text>
-          </View>
-        )}
-
-        <PlaceCard
-          heading="Pick up from"
-          place={delivery.restaurant}
-          active={atRestaurant}
-          note={
-            atRestaurant
-              ? delivery.foodReady
-                ? 'Food is ready. Collect it from the counter.'
-                : 'Still being prepared. Wait at the restaurant.'
-              : 'Collected'
-          }
-        />
-
-        <PlaceCard
-          heading="Deliver to"
-          place={delivery.customer}
-          active={!atRestaurant}
-          note={delivery.customer.instructions ? `Note: ${delivery.customer.instructions}` : null}
-        />
-
-        <View style={styles.card}>
-          <Text style={styles.cardHeading}>Items to collect</Text>
-          {delivery.items.map((item, index) => (
-            <View key={`${item.name}-${index}`} style={styles.itemRow}>
-              <Text style={styles.itemQty}>{item.quantity} ×</Text>
-              <Text style={styles.itemName}>{item.name}</Text>
-            </View>
-          ))}
-          <Text style={styles.itemHint}>Check the bag has everything before you leave the restaurant.</Text>
-        </View>
-
-        <View style={styles.earningRow}>
-          <Text style={styles.earningLabel}>You earn on this order</Text>
-          <Text style={styles.earningValue}>{formatRupees(delivery.earningPaise)}</Text>
-        </View>
-        <Text style={styles.earningHint}>
-          {formatKm(delivery.distanceKm)} trip
-          {delivery.tipPaise > 0 ? ` · includes ${formatRupees(delivery.tipPaise)} tip` : ''}
+      <View style={[styles.stage, pickup ? styles.stagePickup : styles.stageDrop]}>
+        <Feather name={pickup ? 'shopping-bag' : 'home'} size={16} color="#fff" />
+        <Text style={styles.stageText}>
+          {pickup ? 'Step 1 of 2 · Pick up' : 'Step 2 of 2 · Deliver'}
+          {'  ·  '}
+          {delivery.status === 'accepted'
+            ? 'Go to the restaurant'
+            : delivery.status === 'reached_restaurant'
+              ? 'At the restaurant'
+              : delivery.status === 'picked_up'
+                ? 'Go to the customer'
+                : 'At the customer'}
         </Text>
-      </ScrollView>
+      </View>
+
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={async () => {
+                setRefreshing(true)
+                await load()
+                setRefreshing(false)
+              }}
+              tintColor={colors.brand}
+            />
+          }
+        >
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+
+          {pickup ? (
+            <>
+              <PlaceCard
+                heading="Pick up from"
+                place={delivery.restaurant}
+                note={delivery.foodReady ? 'Food is ready. Collect it from the counter.' : 'Still being prepared. Wait at the restaurant.'}
+                distance={delivery.status === 'accepted' ? delivery.pickupKm : null}
+              />
+
+              <View style={styles.card}>
+                <Text style={styles.cardHeading}>Items to collect</Text>
+                {delivery.items.map((item, index) => (
+                  <View key={`${item.name}-${index}`} style={styles.itemRow}>
+                    <Text style={styles.itemQty}>{item.quantity} ×</Text>
+                    <Text style={styles.itemName}>{item.name}</Text>
+                  </View>
+                ))}
+                <Text style={styles.itemHint}>Check the bag has everything before you leave the restaurant.</Text>
+              </View>
+
+              <View style={styles.nextUp}>
+                <Feather name="info" size={14} color={colors.muted} />
+                <Text style={styles.nextUpText}>
+                  Next: deliver to {delivery.customer.name}, {formatKm(delivery.dropKm)} away.{' '}
+                  {delivery.collectPaise > 0
+                    ? `Collect ${formatRupees(delivery.collectPaise)} in cash.`
+                    : 'Prepaid: no cash to collect.'}
+                </Text>
+              </View>
+            </>
+          ) : (
+            <>
+              {delivery.collectPaise > 0 ? (
+                <View style={styles.cash}>
+                  <Feather name="dollar-sign" size={18} color={colors.warning} />
+                  <Text style={styles.cashText}>
+                    Cash order: collect <Text style={styles.cashAmount}>{formatRupees(delivery.collectPaise)}</Text>{' '}
+                    from the customer
+                  </Text>
+                </View>
+              ) : (
+                <View style={styles.paid}>
+                  <Feather name="check-circle" size={16} color={colors.brandInk} />
+                  <Text style={styles.paidText}>Prepaid: do not collect any money</Text>
+                </View>
+              )}
+
+              <PlaceCard
+                heading="Deliver to"
+                place={delivery.customer}
+                note={[
+                  delivery.customer.landmark ? `Landmark: ${delivery.customer.landmark}` : null,
+                  delivery.customer.instructions ? `Note: ${delivery.customer.instructions}` : null,
+                ]
+                  .filter(Boolean)
+                  .join('\n') || null}
+                distance={null}
+              />
+
+              {delivery.status === 'arrived' && delivery.codeRequired ? (
+                <View style={styles.card}>
+                  <Text style={styles.cardHeading}>Customer's delivery code</Text>
+                  <Text style={styles.codeHint}>
+                    Ask the customer for the 4-digit code in their Foodos app, then swipe to finish.
+                  </Text>
+                  <TextInput
+                    style={styles.codeInput}
+                    value={code}
+                    onChangeText={text => setCode(text.replace(/\D/g, '').slice(0, 4))}
+                    keyboardType="number-pad"
+                    maxLength={4}
+                    placeholder="••••"
+                    placeholderTextColor={colors.faint}
+                    accessibilityLabel="Delivery code"
+                  />
+                </View>
+              ) : null}
+            </>
+          )}
+
+          <View style={styles.earningRow}>
+            <Text style={styles.earningLabel}>You earn on this order</Text>
+            <Text style={styles.earningValue}>{formatRupees(delivery.earningPaise)}</Text>
+          </View>
+          <Text style={styles.earningHint}>
+            {formatKm(delivery.distanceKm)} trip
+            {delivery.tipPaise > 0 ? ` · includes ${formatRupees(delivery.tipPaise)} tip` : ''}
+          </Text>
+        </ScrollView>
+      </KeyboardAvoidingView>
 
       {next ? (
         <View style={[styles.footer, { paddingBottom: space.lg + insets.bottom }]}>
-          {blocked ? (
+          {foodNotReady ? (
             <Text style={styles.blockedHint}>
               The restaurant has not marked the food ready yet. This unlocks automatically when they do.
             </Text>
+          ) : needsCode ? (
+            <Text style={styles.blockedHint}>Enter the customer's 4-digit code to finish.</Text>
+          ) : next.action === 'reached' || next.action === 'arrived' ? (
+            <Text style={styles.footerHint}>
+              Works within {delivery.geofenceMetres} m of the {next.action === 'reached' ? 'restaurant' : 'customer'}.
+            </Text>
           ) : null}
-          <Pressable
-            style={[styles.primary, (busy || blocked) && styles.dim]}
-            onPress={onPrimary}
-            disabled={busy || blocked}
-          >
-            {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>{next.label}</Text>}
-          </Pressable>
+          <SwipeButton label={next.label} onComplete={onSwipe} disabled={swipeLocked} busy={busy} />
         </View>
       ) : null}
+
+      <Modal visible={!!blocked} transparent animationType="slide" onRequestClose={() => setBlocked(null)}>
+        <View style={styles.sheetBackdrop}>
+          <View style={[styles.sheet, { paddingBottom: space.xl + insets.bottom }]}>
+            <View style={styles.sheetIcon}>
+              <Feather name="map-pin" size={30} color={colors.brand} />
+            </View>
+            <Text style={styles.sheetTitle}>{blocked?.title}</Text>
+            <Text style={styles.sheetBody}>{blocked?.body}</Text>
+            <Pressable style={styles.primary} onPress={() => setBlocked(null)}>
+              <Text style={styles.primaryText}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -276,50 +363,57 @@ export default function DeliveryScreen() {
 function PlaceCard({
   heading,
   place,
-  active,
   note,
+  distance,
 }: {
   heading: string
   place: Place
-  active: boolean
   note: string | null
+  distance: number | null
 }) {
   return (
-    <View style={[styles.card, active && styles.cardActive]}>
+    <View style={[styles.card, styles.cardActive]}>
       <Text style={styles.cardHeading}>{heading}</Text>
       <Text style={styles.placeName}>{place.name}</Text>
       <Text style={styles.placeAddress}>{place.address}</Text>
+      {distance != null ? <Text style={styles.placeDistance}>{formatKm(distance)} from you</Text> : null}
       {note ? <Text style={styles.placeNote}>{note}</Text> : null}
 
-      {active ? (
-        <View style={styles.placeActions}>
-          <Pressable
-            style={[styles.placeButton, !place.phone && styles.dim]}
-            onPress={() => call(place.phone)}
-            disabled={!place.phone}
-          >
-            <Feather name="phone" size={15} color={colors.brand} />
-            <Text style={styles.placeButtonText}>Call</Text>
-          </Pressable>
-          <Pressable style={[styles.placeButton, styles.placeButtonMain]} onPress={() => navigateTo(place)}>
-            <Feather name="navigation" size={15} color="#fff" />
-            <Text style={[styles.placeButtonText, styles.placeButtonTextMain]}>Navigate</Text>
-          </Pressable>
-        </View>
-      ) : null}
+      <View style={styles.placeActions}>
+        <Pressable
+          style={[styles.placeButton, !place.phone && styles.dim]}
+          onPress={() => call(place.phone)}
+          disabled={!place.phone}
+        >
+          <Feather name="phone" size={15} color={colors.brand} />
+          <Text style={styles.placeButtonText}>Call</Text>
+        </Pressable>
+        <Pressable style={[styles.placeButton, styles.placeButtonMain]} onPress={() => navigateTo(place)}>
+          <Feather name="navigation" size={15} color="#fff" />
+          <Text style={[styles.placeButtonText, styles.placeButtonTextMain]}>Navigate</Text>
+        </Pressable>
+      </View>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.ground },
+  flex: { flex: 1 },
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.xl, gap: space.sm },
   dim: { opacity: 0.5 },
   content: { padding: space.lg, gap: space.md, paddingBottom: space.xxxl },
 
-  progress: { flexDirection: 'row', gap: 6 },
-  progressBar: { flex: 1, height: 5, borderRadius: radius.pill, backgroundColor: colors.line },
-  progressBarDone: { backgroundColor: colors.brand },
+  stage: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.sm,
+  },
+  stagePickup: { backgroundColor: '#8a5a00' },
+  stageDrop: { backgroundColor: colors.brand },
+  stageText: { ...type.smallStrong, color: '#fff', flex: 1 },
 
   cash: {
     flexDirection: 'row',
@@ -353,7 +447,8 @@ const styles = StyleSheet.create({
   cardHeading: { ...type.overline, color: colors.muted, marginBottom: space.xs },
   placeName: { ...type.heading, color: colors.ink },
   placeAddress: { ...type.small, color: colors.body, marginTop: 2, lineHeight: 19 },
-  placeNote: { ...type.caption, color: colors.warning, marginTop: space.sm },
+  placeDistance: { ...type.caption, color: colors.muted, marginTop: space.xs },
+  placeNote: { ...type.caption, color: colors.warning, marginTop: space.sm, lineHeight: 17 },
   placeActions: { flexDirection: 'row', gap: space.sm, marginTop: space.md },
   placeButton: {
     flex: 1,
@@ -375,6 +470,22 @@ const styles = StyleSheet.create({
   itemName: { ...type.body, color: colors.ink, flex: 1 },
   itemHint: { ...type.caption, color: colors.muted, marginTop: space.sm },
 
+  nextUp: { flexDirection: 'row', gap: space.sm, alignItems: 'flex-start', paddingHorizontal: space.xs },
+  nextUpText: { ...type.caption, color: colors.muted, flex: 1, lineHeight: 17 },
+
+  codeHint: { ...type.small, color: colors.body, marginBottom: space.md },
+  codeInput: {
+    height: 60,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.brand,
+    textAlign: 'center',
+    fontSize: 28,
+    fontWeight: '800',
+    letterSpacing: 12,
+    color: colors.ink,
+  },
+
   earningRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: space.xs },
   earningLabel: { ...type.body, color: colors.body },
   earningValue: { ...type.title, color: colors.brand },
@@ -389,6 +500,7 @@ const styles = StyleSheet.create({
     ...shadow.bar,
   },
   blockedHint: { ...type.caption, color: colors.warning, textAlign: 'center' },
+  footerHint: { ...type.caption, color: colors.muted, textAlign: 'center' },
   primary: {
     alignSelf: 'stretch',
     alignItems: 'center',
@@ -398,6 +510,26 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brand,
   },
   primaryText: { ...type.bodyStrong, fontSize: 16, color: '#fff' },
+
+  sheetBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.45)' },
+  sheet: {
+    alignItems: 'center',
+    gap: space.md,
+    padding: space.xl,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    backgroundColor: colors.surface,
+  },
+  sheetIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.brandSoft,
+  },
+  sheetTitle: { ...type.title, color: colors.ink, textAlign: 'center' },
+  sheetBody: { ...type.body, color: colors.body, textAlign: 'center', marginBottom: space.sm },
 
   doneIcon: {
     width: 76,

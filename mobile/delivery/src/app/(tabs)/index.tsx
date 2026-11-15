@@ -31,11 +31,10 @@ import {
 import { useLocationSharing } from '@/lib/LocationSharing'
 import { colors, radius, shadow, space, type } from '@/theme'
 
-// Offers are checked this often while online and free. A delivery is first come,
-// first served, so a slow check means losing orders to other riders.
-const POLL_MS = 8000
-// An offer left unanswered is skipped, so it goes to someone who is looking.
-const OFFER_SECONDS = 60
+// Offers are checked this often while online and free. Each order is offered
+// to one rider at a time for about 30 seconds, so a slow check eats into the
+// time to accept it.
+const POLL_MS = 5000
 const BUZZ = [0, 500, 200, 500]
 
 export default function HomeScreen() {
@@ -152,9 +151,15 @@ export default function HomeScreen() {
     }
   }
 
+  // Skipping passes the order straight to the next nearest rider.
   async function skip(offer: Offer) {
     setOffers(current => current.filter(o => o.id !== offer.id))
     skipOffer(offer.id).catch(() => {})
+  }
+
+  // Run out: the server has already moved it on, so it just leaves the screen.
+  function expire(offer: Offer) {
+    setOffers(current => current.filter(o => o.id !== offer.id))
   }
 
   if (loading) {
@@ -267,6 +272,7 @@ export default function HomeScreen() {
                 busy={acceptingId === offer.id}
                 onAccept={() => accept(offer)}
                 onSkip={() => skip(offer)}
+                onExpire={() => expire(offer)}
               />
             ))}
           </>
@@ -281,14 +287,17 @@ function OfferCard({
   busy,
   onAccept,
   onSkip,
+  onExpire,
 }: {
   offer: Offer
   busy: boolean
   onAccept: () => void
   onSkip: () => void
+  onExpire: () => void
 }) {
-  // Counts down from when this card first appeared on this phone.
-  const [left, setLeft] = useState(OFFER_SECONDS)
+  // The server's own countdown: when it runs out, the order goes to the next
+  // rider whatever this phone shows.
+  const [left, setLeft] = useState(offer.secondsLeft)
 
   useEffect(() => {
     const timer = setInterval(() => setLeft(seconds => seconds - 1), 1000)
@@ -297,8 +306,8 @@ function OfferCard({
   }, [])
 
   useEffect(() => {
-    if (left <= 0 && !busy) onSkip()
-    // onSkip changes identity every render; only the countdown should trigger it.
+    if (left <= 0 && !busy) onExpire()
+    // onExpire changes identity every render; only the countdown should trigger it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [left, busy])
 
@@ -315,10 +324,10 @@ function OfferCard({
       <Leg
         icon="shopping-bag"
         title={offer.restaurant.name}
-        detail={[offer.restaurant.area, `${formatKm(offer.pickupKm)} away`].filter(Boolean).join(' · ')}
+        detail={[offer.restaurant.area, `Pickup ${formatKm(offer.pickupKm)} away`].filter(Boolean).join(' · ')}
       />
       <View style={styles.legLine} />
-      <Leg icon="map-pin" title={offer.dropArea || 'Customer'} detail={`${formatKm(offer.dropKm)} from the restaurant`} />
+      <Leg icon="map-pin" title={offer.dropArea || 'Customer'} detail={`Drop ${formatKm(offer.dropKm)} from the restaurant`} />
 
       <View style={styles.offerMeta}>
         <Text style={styles.offerMetaText}>

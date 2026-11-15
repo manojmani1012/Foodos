@@ -197,8 +197,16 @@ export default function OrderDetailScreen() {
           <Row label="Subtotal" value={formatRupees(order.subtotalPaise)} />
           <Row label="Packaging" value={formatRupees(order.packagingFeePaise)} />
           <Row label="Tax" value={formatRupees(order.taxPaise)} />
+          {order.deliveryFeePaise ? <Row label="Delivery fee" value={formatRupees(order.deliveryFeePaise)} /> : null}
           {order.discountPaise > 0 ? (
             <Row label="Discount" value={`− ${formatRupees(order.discountPaise)}`} />
+          ) : null}
+          {order.tipPaise ? <Row label="Rider tip" value={formatRupees(order.tipPaise)} /> : null}
+          {order.roundOffPaise ? (
+            <Row
+              label="Round off"
+              value={`${order.roundOffPaise < 0 ? '− ' : ''}${formatRupees(Math.abs(order.roundOffPaise))}`}
+            />
           ) : null}
 
           <View style={styles.divider} />

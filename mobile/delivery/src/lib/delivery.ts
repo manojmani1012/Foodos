@@ -1,3 +1,4 @@
+import * as Location from 'expo-location'
 import { Linking, Platform } from 'react-native'
 
 import { request } from './apiClient'
@@ -36,6 +37,10 @@ export type Offer = {
   // Cash orders: what has to be collected at the door. 0 when prepaid.
   collectPaise: number
   openedAt: string
+  // Each request is offered to one rider at a time; when this runs out it
+  // moves on to the next rider.
+  expiresAt: string
+  secondsLeft: number
 }
 
 export type DeliveryStatus = 'accepted' | 'reached_restaurant' | 'picked_up' | 'arrived' | 'delivered'
@@ -55,11 +60,17 @@ export type Delivery = {
   orderStatus: string
   foodReady: boolean
   restaurant: Place
-  customer: Place & { instructions: string | null }
+  customer: Place & { instructions: string | null; landmark: string | null }
   items: { name: string; quantity: number }[]
   paymentMethod: string
   collectPaise: number
   distanceKm: number | null
+  pickupKm: number | null
+  dropKm: number | null
+  // "Delivered" needs the customer's 4-digit code.
+  codeRequired: boolean
+  // How close to the pin "reached" and "arrived" are allowed.
+  geofenceMetres: number
   earningPaise: number
   tipPaise: number
   acceptedAt: string | null
@@ -136,23 +147,49 @@ export function skipOffer(id: string) {
   return request(`${BASE}/deliveries/${id}/reject`, { method: 'POST' })
 }
 
-// The next step a rider takes from each status, and what the button says.
-export const NEXT_STEP: Record<
-  Exclude<DeliveryStatus, 'delivered'>,
-  { action: 'reached' | 'picked-up' | 'arrived' | 'delivered'; label: string }
-> = {
-  accepted: { action: 'reached', label: "I've reached the restaurant" },
-  reached_restaurant: { action: 'picked-up', label: 'Order picked up' },
-  picked_up: { action: 'arrived', label: "I've arrived at the customer" },
-  arrived: { action: 'delivered', label: 'Order delivered' },
+export type StepAction = 'reached' | 'picked-up' | 'arrived' | 'delivered'
+
+// The next step a rider takes from each status, and what the swipe says.
+export const NEXT_STEP: Record<Exclude<DeliveryStatus, 'delivered'>, { action: StepAction; label: string }> = {
+  accepted: { action: 'reached', label: 'Swipe: reached the restaurant' },
+  reached_restaurant: { action: 'picked-up', label: 'Swipe: order picked up' },
+  picked_up: { action: 'arrived', label: 'Swipe: reached the customer' },
+  arrived: { action: 'delivered', label: 'Swipe: order delivered' },
+}
+
+// The steps the server checks against the map: where the phone is right now
+// goes with them.
+const AT_A_PLACE: StepAction[] = ['reached', 'arrived']
+
+async function hereNow(): Promise<{ latitude: number; longitude: number; accuracy?: number } | null> {
+  try {
+    const permission = await Location.getForegroundPermissionsAsync()
+
+    if (permission.status !== 'granted') return null
+
+    const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+
+    return {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracy: position.coords.accuracy ?? undefined,
+    }
+  } catch {
+    // The server falls back to the last position the app shared.
+    return null
+  }
 }
 
 export async function advance(
   id: string,
-  action: 'reached' | 'picked-up' | 'arrived' | 'delivered',
-  cashCollected = false,
+  action: StepAction,
+  options: { cashCollected?: boolean; code?: string } = {},
 ): Promise<Delivery | null> {
-  const body = action === 'delivered' ? { cashCollected } : undefined
+  const here = AT_A_PLACE.includes(action) ? await hereNow() : null
+  const body = {
+    ...(here ?? {}),
+    ...(action === 'delivered' ? { cashCollected: !!options.cashCollected, code: options.code } : {}),
+  }
   const result = await request(`${BASE}/deliveries/${id}/${action}`, { method: 'POST', body })
 
   // "delivered" returns the finished delivery; every other step returns the
@@ -197,7 +234,11 @@ export function call(phone: string | null) {
 // --- Display ---------------------------------------------------------------
 
 export function formatRupees(paise: number): string {
-  return `₹${(Math.round(paise) / 100).toLocaleString('en-IN')}`
+  const rupees = Math.round(paise) / 100
+  // "₹146", or "₹5.50" when there are paise: never "₹5.5".
+  const decimals = Number.isInteger(rupees) ? 0 : 2
+
+  return `₹${rupees.toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: 2 })}`
 }
 
 export function formatKm(km: number | null): string {

@@ -8,12 +8,13 @@ import { fetchDashboard } from './restaurant'
 import { colors, radius, shadow, space, type } from '@/theme'
 
 // A kitchen is loud and the phone is often on a shelf, so a new order has to
-// announce itself rather than wait to be noticed on screen.
+// announce itself rather than wait to be noticed on screen. It keeps buzzing
+// until every new order is answered: one not accepted within 5 minutes is
+// cancelled for the customer.
 //
-// This works while the app is open. Alerting a phone that is locked or has the
-// app closed needs push notifications (Firebase), which come later.
+// This works while the app is open; push notifications cover a closed app.
 
-const POLL_MS = 15000
+const POLL_MS = 10000
 // Long-short-long, repeated: distinct from an ordinary notification buzz.
 const PATTERN = [0, 600, 250, 600, 250, 600]
 
@@ -37,9 +38,11 @@ export function NewOrderAlertProvider({ children }: { children: React.ReactNode 
       const { newOrders: count } = await fetchDashboard()
 
       if (lastCount.current !== null && count > lastCount.current) {
-        Vibration.vibrate(PATTERN)
         setBanner(count - lastCount.current)
       }
+
+      // Every check while anything is waiting, not just when it arrives.
+      if (count > 0) Vibration.vibrate(PATTERN)
 
       lastCount.current = count
       setNewOrders(count)
@@ -99,7 +102,7 @@ export function NewOrderAlertProvider({ children }: { children: React.ReactNode 
             <Text style={styles.bannerTitle}>
               {banner === 1 ? 'New order!' : `${banner} new orders!`}
             </Text>
-            <Text style={styles.bannerHint}>Tap to accept</Text>
+            <Text style={styles.bannerHint}>Tap to accept · cancelled if not accepted in 5 min</Text>
           </View>
           <Feather name="chevron-right" size={18} color="#fff" />
         </Pressable>

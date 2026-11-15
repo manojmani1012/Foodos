@@ -71,6 +71,11 @@ export type OrderDetail = {
   items: OrderItem[]
   subtotalPaise: number
   packagingFeePaise: number
+  // The rest of the customer's bill, so the lines add up to the total the
+  // rider collects.
+  deliveryFeePaise: number
+  tipPaise: number
+  roundOffPaise: number
   taxPaise: number
   discountPaise: number
   totalPaise: number
@@ -410,7 +415,11 @@ export function resolveImageUrl(imageUrl: string | null | undefined): string | n
 // --- Display helpers -------------------------------------------------------
 
 export function formatRupees(paise: number): string {
-  return `₹${(Math.round(paise) / 100).toLocaleString('en-IN')}`
+  const rupees = Math.round(paise) / 100
+  // "₹146", or "₹5.50" when there are paise: never "₹5.5".
+  const decimals = Number.isInteger(rupees) ? 0 : 2
+
+  return `₹${rupees.toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: 2 })}`
 }
 
 // Prices are typed in rupees and stored in paise. Rounding stops a typed
