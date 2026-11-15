@@ -16,6 +16,14 @@ function toCartItems(lines: CartLine[]) {
   }))
 }
 
+export type Serviceable = {
+  ok: boolean
+  distanceKm: number | null
+  radiusKm: number
+  code: 'restaurant_unavailable' | 'address_needs_pin' | 'address_too_far' | null
+  reason: string | null
+}
+
 export type Quote = {
   restaurantName: string
   subtotal: number
@@ -23,14 +31,22 @@ export type Quote = {
   packagingFee: number
   tax: number
   discount: number
+  // The bill rounds to whole rupees; this is the difference, shown as its own line.
+  roundOff: number
   total: number
   coupon: { code: string | null; applied: boolean; reason: string | null; discountPaise: number }
+  // Whether the restaurant delivers to the chosen address. Absent without one.
+  serviceable: Serviceable | null
 }
 
-export async function quoteCart(lines: CartLine[], couponCode?: string | null): Promise<Quote> {
+export async function quoteCart(
+  lines: CartLine[],
+  couponCode?: string | null,
+  addressId?: string | null,
+): Promise<Quote> {
   const body = await request('/api/v1/customer/cart/quote', {
     method: 'POST',
-    body: { items: toCartItems(lines), couponCode: couponCode || null },
+    body: { items: toCartItems(lines), couponCode: couponCode || null, addressId: addressId || null },
   })
 
   return {
@@ -40,8 +56,10 @@ export async function quoteCart(lines: CartLine[], couponCode?: string | null): 
     packagingFee: rupees(body.packagingFeePaise),
     tax: rupees(body.taxPaise),
     discount: rupees(body.discountPaise),
+    roundOff: rupees(body.roundOffPaise ?? 0),
     total: rupees(body.totalPaise),
     coupon: body.coupon,
+    serviceable: body.serviceable ?? null,
   }
 }
 
@@ -50,17 +68,25 @@ export type Address = {
   label: string
   line1: string
   line2: string | null
+  landmark?: string | null
   city: string
   pincode: string | null
-  // Set when the customer pinned their location while at this address, so
-  // the rider can navigate straight to it.
+  // The map pin: where the rider navigates to, and what decides which
+  // restaurants deliver here. Addresses saved before pins were required have
+  // none and must be pinned before ordering.
   latitude?: number | null
   longitude?: number | null
   isDefault: boolean
 }
 
+export function hasPin(address: Pick<Address, 'latitude' | 'longitude'> | null | undefined): boolean {
+  return address?.latitude != null && address?.longitude != null
+}
+
 export function formatAddress(address: Address): string {
-  return [address.line1, address.line2, address.city, address.pincode].filter(Boolean).join(', ')
+  return [address.line1, address.line2, address.landmark ? `near ${address.landmark}` : null, address.city, address.pincode]
+    .filter(Boolean)
+    .join(', ')
 }
 
 export async function fetchAddresses(): Promise<Address[]> {
@@ -71,6 +97,13 @@ export async function fetchAddresses(): Promise<Address[]> {
 
 export async function addAddress(address: Partial<Address>): Promise<Address> {
   const body = await request('/api/v1/customer/addresses', { method: 'POST', body: address })
+
+  return body.address
+}
+
+// Replaces a saved address, pin included.
+export async function updateAddress(id: string, address: Partial<Address>): Promise<Address> {
+  const body = await request(`/api/v1/customer/addresses/${id}`, { method: 'PUT', body: address })
 
   return body.address
 }
@@ -90,6 +123,7 @@ export type Order = {
   address: {
     line1: string
     line2?: string | null
+    landmark?: string | null
     city: string
     pincode?: string | null
     latitude?: number | null
@@ -108,10 +142,19 @@ export type Order = {
   packagingFee: number
   tax: number
   discount: number
+  tip: number
+  roundOff: number
   total: number
   paymentMethod: string
   placedAt: string
   estimatedDeliveryAt: string | null
+  // "Arriving in X mins", worked out by the server on every read; 0 means the
+  // rider is at the door. Null once the order is over.
+  etaMinutes: number | null
+  // What the customer tells the rider at the door, while it is needed.
+  deliveryCode: string | null
+  // Between 11 pm and 5 am: riders may call ahead.
+  lateNight: boolean
   cancellationReason: string | null
   // Set when a paid order was cancelled: the money going back to the customer.
   refund: { status: 'pending' | 'processed' | 'failed'; amount: number } | null
@@ -152,10 +195,15 @@ export function mapOrder(api: any): Order {
     packagingFee: rupees(api.packagingFeePaise),
     tax: rupees(api.taxPaise),
     discount: rupees(api.discountPaise),
+    tip: rupees(api.tipPaise ?? 0),
+    roundOff: rupees(api.roundOffPaise ?? 0),
     total: rupees(api.totalPaise),
     paymentMethod: api.paymentMethod,
     placedAt: api.placedAt,
     estimatedDeliveryAt: api.estimatedDeliveryAt,
+    etaMinutes: api.etaMinutes ?? null,
+    deliveryCode: api.deliveryCode ?? null,
+    lateNight: !!api.lateNight,
     cancellationReason: api.cancellationReason,
     refund: api.refund ? { status: api.refund.status, amount: rupees(api.refund.amountPaise) } : null,
     delivery: api.delivery ?? null,

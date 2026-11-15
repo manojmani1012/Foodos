@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { TrackingMap } from '@/components/TrackingMap'
+import { formatMoney } from '@/lib/catalogue'
 import { cancelOrder, fetchOrder, formatAddress, type Order, type Tracking } from '@/lib/orders'
 import { fetchOrderReview, reviewOrder } from '@/lib/profile'
 import { colors, radius, shadow, space, type } from '@/theme'
@@ -47,6 +48,14 @@ function formatTime(iso?: string | null): string {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
+// "Arriving in 25 mins", the way Zomato says it. 0 means the rider is at the door.
+function arrivalText(minutes: number | null): string | null {
+  if (minutes === null) return null
+  if (minutes <= 0) return 'Arriving now'
+
+  return `Arriving in ${minutes} min${minutes === 1 ? '' : 's'}`
+}
+
 export default function OrderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
@@ -59,6 +68,7 @@ export default function OrderScreen() {
   const [rating, setRating] = useState(0)
   const [comment, setComment] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -169,15 +179,11 @@ export default function OrderScreen() {
           <>
             <View style={styles.statusCard}>
               <View style={styles.statusHead}>
-                <View>
+                <View style={styles.flex}>
+                  <Text style={styles.statusRestaurant}>{order.restaurant.name}</Text>
                   <Text style={styles.statusLabel}>
                     {STEPS[Math.max(currentIndex, 0)]?.label ?? 'Order placed'}
                   </Text>
-                  {order.estimatedDeliveryAt && (
-                    <Text style={styles.statusEta}>
-                      Expected by {formatTime(order.estimatedDeliveryAt)}
-                    </Text>
-                  )}
                 </View>
                 <View style={styles.statusBadge}>
                   <Text style={styles.statusBadgeText}>
@@ -185,7 +191,56 @@ export default function OrderScreen() {
                   </Text>
                 </View>
               </View>
+
+              {arrivalText(order.etaMinutes) ? (
+                <View style={styles.etaRow}>
+                  <View style={styles.etaPill}>
+                    <Text style={styles.etaText}>{arrivalText(order.etaMinutes)}</Text>
+                  </View>
+                  {/* Worked out again on every load; this asks for it now. */}
+                  <Pressable
+                    style={styles.etaRefresh}
+                    accessibilityLabel="Refresh arrival time"
+                    disabled={refreshing}
+                    onPress={async () => {
+                      setRefreshing(true)
+                      await load()
+                      setRefreshing(false)
+                    }}
+                  >
+                    {refreshing ? (
+                      <ActivityIndicator color={colors.surface} size="small" />
+                    ) : (
+                      <Feather name="refresh-cw" size={15} color={colors.surface} />
+                    )}
+                  </Pressable>
+                </View>
+              ) : null}
             </View>
+
+            {order.lateNight ? (
+              <View style={styles.nightBanner}>
+                <Feather name="moon" size={18} color={colors.brandInk} />
+                <Text style={styles.nightText}>
+                  Late night delivery! Keep your phone close, the delivery partner may call closer to arrival.
+                </Text>
+              </View>
+            ) : null}
+
+            {order.deliveryCode ? (
+              <View style={styles.codeCard}>
+                <View style={styles.flex}>
+                  <Text style={styles.codeTitle}>Delivery code</Text>
+                  <Text style={styles.codeHint}>
+                    Share it with the delivery partner when they hand over your order. Only then can they mark it
+                    delivered.
+                  </Text>
+                </View>
+                <Text style={styles.codeDigits} accessibilityLabel={`Delivery code ${order.deliveryCode.split('').join(' ')}`}>
+                  {order.deliveryCode}
+                </Text>
+              </View>
+            ) : null}
 
             {order.delivery ? <RiderCard tracking={order.delivery} /> : null}
 
@@ -254,7 +309,7 @@ export default function OrderScreen() {
                   <Text style={styles.itemAddons}>{item.addons.map(a => a.name).join(', ')}</Text>
                 )}
               </View>
-              <Text style={styles.itemPrice}>₹{item.lineTotal.toFixed(0)}</Text>
+              <Text style={styles.itemPrice}>{formatMoney(item.lineTotal)}</Text>
             </View>
           ))}
 
@@ -265,12 +320,14 @@ export default function OrderScreen() {
           <BillRow label="Packaging fee" value={order.packagingFee} />
           <BillRow label="GST" value={order.tax} />
           {order.discount > 0 && <BillRow label="Discount" value={-order.discount} tone="good" />}
+          {order.tip > 0 && <BillRow label="Delivery partner tip" value={order.tip} />}
+          {order.roundOff !== 0 && <BillRow label="Round off" value={order.roundOff} />}
 
           <View style={styles.billTotal}>
             <Text style={styles.billTotalLabel}>
               {order.paymentMethod === 'cod' ? 'Pay on delivery' : 'Paid'}
             </Text>
-            <Text style={styles.billTotalValue}>₹{order.total.toFixed(0)}</Text>
+            <Text style={styles.billTotalValue}>{formatMoney(order.total)}</Text>
           </View>
         </View>
 
@@ -438,7 +495,7 @@ function BillRow({ label, value, tone }: { label: string; value: number; tone?: 
     <View style={styles.billRow}>
       <Text style={styles.billLabel}>{label}</Text>
       <Text style={[styles.billValue, tone === 'good' && styles.billValueGood]}>
-        {value < 0 ? '−' : ''}₹{Math.abs(value).toFixed(0)}
+        {formatMoney(value)}
       </Text>
     </View>
   )
@@ -494,8 +551,49 @@ const styles = StyleSheet.create({
     ...shadow.raised,
   },
   statusHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  statusLabel: { ...type.title, color: colors.surface },
-  statusEta: { ...type.small, color: '#ffffffcc', marginTop: space.xs },
+  statusRestaurant: { ...type.small, color: '#ffffffcc' },
+  statusLabel: { ...type.title, color: colors.surface, marginTop: 2 },
+  etaRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.md },
+  etaPill: {
+    paddingHorizontal: space.md,
+    paddingVertical: space.xs + 2,
+    borderRadius: radius.md,
+    backgroundColor: '#ffffff26',
+  },
+  etaText: { ...type.bodyStrong, color: colors.surface },
+  etaRefresh: {
+    width: 34,
+    height: 34,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff26',
+  },
+
+  nightBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    padding: space.md,
+    borderRadius: radius.lg,
+    backgroundColor: colors.brandSoft,
+  },
+  nightText: { ...type.small, color: colors.brandInk, flex: 1, lineHeight: 19 },
+
+  codeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    padding: space.lg,
+    borderRadius: radius.lg,
+    borderWidth: 1.5,
+    borderColor: colors.brand,
+    backgroundColor: colors.surface,
+    ...shadow.card,
+  },
+  codeTitle: { ...type.bodyStrong, color: colors.ink },
+  codeHint: { ...type.caption, color: colors.muted, marginTop: 2, lineHeight: 16 },
+  codeDigits: { ...type.display, color: colors.brand, letterSpacing: 6, fontVariant: ['tabular-nums'] },
   statusBadge: {
     paddingHorizontal: space.md,
     paddingVertical: space.xs,

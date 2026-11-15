@@ -1,43 +1,13 @@
 import { createElement, useEffect, useRef, useState } from 'react'
 import { Text, View } from 'react-native'
 
+import { loadMapLibre } from './mapLibreLoader'
 import { mapStyles as styles, type Point } from './trackingMapPage'
 
 // The website version: MapLibre drawn straight into the page, with the same
-// tiles, pins and fitting as the app's WebView map. Not in an iframe: a page
-// written into a frame would need inline script, which the site's
-// Content-Security-Policy deliberately forbids.
+// tiles, pins and fitting as the app's WebView map.
 
-// The same pinned release the app uses.
-const MAPLIBRE = 'https://unpkg.com/maplibre-gl@5.24.0/dist'
 const STYLE = 'https://tiles.openfreemap.org/styles/liberty'
-
-let loading: Promise<any> | null = null
-
-// The library is fetched the first time a map is shown, not with the site.
-function loadMapLibre(): Promise<any> {
-  const existing = (window as any).maplibregl
-  if (existing) return Promise.resolve(existing)
-
-  loading ??= new Promise((resolve, reject) => {
-    const css = document.createElement('link')
-    css.rel = 'stylesheet'
-    css.href = `${MAPLIBRE}/maplibre-gl.css`
-    document.head.appendChild(css)
-
-    const script = document.createElement('script')
-    script.src = `${MAPLIBRE}/maplibre-gl.js`
-    script.async = true
-    script.onload = () => resolve((window as any).maplibregl)
-    script.onerror = () => {
-      loading = null
-      reject(new Error('The map could not load'))
-    }
-    document.head.appendChild(script)
-  })
-
-  return loading
-}
 
 function pin(maplibregl: any, map: any, text: string, point: Point, size: number) {
   const element = document.createElement('div')

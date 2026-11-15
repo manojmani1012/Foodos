@@ -1,7 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 
 import { useAuth } from './AuthContext'
-import { fetchAddresses, type Address } from './orders'
+import type { Point } from './catalogue'
+import { fetchAddresses, hasPin, type Address } from './orders'
 
 // The delivery address shown in the header and used at checkout.
 //
@@ -15,6 +16,9 @@ type LocationValue = {
   select: (address: Address) => void
   reload: () => Promise<void>
   label: string
+  // The selected address's map pin, which browsing sends to the server.
+  // Null when no address is chosen, or it was saved before pins existed.
+  point: Point | null
 }
 
 const LocationContext = createContext<LocationValue | null>(null)
@@ -66,6 +70,8 @@ export function LocationProvider({ children }: { children: React.ReactNode }) {
       reload,
       // What the header shows: the area and city, or a prompt to set one.
       label: selected ? `${selected.line1.split(',')[0]}, ${selected.city}` : 'Set delivery address',
+      point:
+        selected && hasPin(selected) ? { latitude: selected.latitude!, longitude: selected.longitude! } : null,
     }
   }, [addresses, selectedId, loading, reload])
 

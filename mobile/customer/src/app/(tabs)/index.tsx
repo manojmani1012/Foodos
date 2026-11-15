@@ -56,13 +56,27 @@ export default function HomeScreen() {
     return () => clearTimeout(timer)
   }, [search])
 
+  // Restaurants are listed for the chosen address's pin, so only those that
+  // deliver there show up, like Swiggy and Zomato. Without a pinned address
+  // there is nothing to list yet: the screen asks for one instead.
+  const point = location.point
+  const needsAddress = !location.loading && !location.selected
+  const needsPin = !!location.selected && !point
+
   const load = useCallback(async () => {
     setError('')
 
+    if (!point) {
+      setRestaurants([])
+      setLoading(false)
+      setRefreshing(false)
+      return
+    }
+
     try {
       const [list, cuisineList, offerList] = await Promise.all([
-        fetchRestaurants({ search: settledSearch, cuisine: cuisine ?? undefined }),
-        fetchCuisines(),
+        fetchRestaurants({ search: settledSearch, cuisine: cuisine ?? undefined, point }),
+        fetchCuisines(point),
         fetchOffers(),
       ])
 
@@ -75,7 +89,7 @@ export default function HomeScreen() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [settledSearch, cuisine])
+  }, [settledSearch, cuisine, point?.latitude, point?.longitude])
 
   useEffect(() => {
     if (isSignedIn) {
@@ -251,7 +265,29 @@ export default function HomeScreen() {
           />
         )}
         ListEmptyComponent={
-          loading ? (
+          needsAddress || needsPin ? (
+            <View style={styles.centeredBlock}>
+              <Feather name="map-pin" size={40} color={colors.brand} />
+              <Text style={styles.promptTitle}>
+                {needsPin ? `Pin ${location.selected!.label} on the map` : 'Where should we deliver?'}
+              </Text>
+              <Text style={styles.emptyText}>
+                {needsPin
+                  ? 'This address was saved without a map pin. Put it on the map so we can show restaurants that deliver there.'
+                  : 'Set your delivery location to see restaurants that deliver to you.'}
+              </Text>
+              <Pressable
+                style={styles.primaryButton}
+                onPress={() =>
+                  needsPin
+                    ? router.push({ pathname: '/location', params: { pin: location.selected!.id } })
+                    : router.push('/location')
+                }
+              >
+                <Text style={styles.primaryButtonText}>{needsPin ? 'Pin this address' : 'Set delivery location'}</Text>
+              </Pressable>
+            </View>
+          ) : loading || location.loading ? (
             <View style={styles.centeredBlock}>
               <ActivityIndicator color={colors.brand} />
             </View>
@@ -267,7 +303,9 @@ export default function HomeScreen() {
             <View style={styles.centeredBlock}>
               <Feather name="search" size={40} color={colors.faint} />
               <Text style={styles.emptyText}>
-                {settledSearch ? `Nothing matching "${settledSearch}"` : 'No restaurants here yet'}
+                {settledSearch
+                  ? `Nothing matching "${settledSearch}" near you`
+                  : 'No restaurants deliver to this address yet'}
               </Text>
               {(settledSearch || cuisine) && (
                 <Pressable
@@ -355,6 +393,12 @@ function RestaurantCard({
 
         <View style={styles.cardFooter}>
           <Text style={styles.cardMeta}>{restaurant.eta}</Text>
+          {restaurant.distanceKm != null && (
+            <>
+              <View style={styles.metaDot} />
+              <Text style={styles.cardMeta}>{restaurant.distanceKm} km</Text>
+            </>
+          )}
           <View style={styles.metaDot} />
           <Text style={styles.cardMeta}>{restaurant.delivery}</Text>
           {restaurant.isVeg && (
@@ -541,6 +585,15 @@ const styles = StyleSheet.create({
   vegText: { ...type.small, color: colors.veg, fontWeight: '600' },
 
   centeredBlock: { alignItems: 'center', paddingVertical: space.xxxl, gap: space.sm },
+  promptTitle: { ...type.heading, color: colors.ink, textAlign: 'center', paddingHorizontal: space.xl },
+  primaryButton: {
+    marginTop: space.sm,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.brand,
+  },
+  primaryButtonText: { ...type.bodyStrong, color: colors.surface },
   emptyEmoji: { fontSize: 40 },
   emptyText: { ...type.body, color: colors.muted, textAlign: 'center', paddingHorizontal: space.xxl },
   ghostButton: {

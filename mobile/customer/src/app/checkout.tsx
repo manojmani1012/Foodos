@@ -15,7 +15,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { useCart } from '@/lib/CartContext'
 import { useLocation } from '@/lib/LocationContext'
-import { formatAddress, newIdempotencyKey, placeOrder, quoteCart, type Quote } from '@/lib/orders'
+import { formatMoney } from '@/lib/catalogue'
+import { formatAddress, hasPin, newIdempotencyKey, placeOrder, quoteCart, type Quote } from '@/lib/orders'
 import { colors, radius, shadow, space, type } from '@/theme'
 
 import { Header } from './cart'
@@ -69,11 +70,15 @@ export default function CheckoutScreen() {
     if (cart.lines.length === 0) return
 
     try {
-      setQuote(await quoteCart(cart.lines, couponCode))
+      setQuote(await quoteCart(cart.lines, couponCode, location.selected?.id))
     } catch (priceError: any) {
       setError(priceError.message || 'Could not price your order')
     }
-  }, [cart.lines, couponCode])
+  }, [cart.lines, couponCode, location.selected?.id])
+
+  // The restaurant must deliver to the chosen address, which must be pinned.
+  const unpinned = !!location.selected && !hasPin(location.selected)
+  const outOfRange = quote?.serviceable && !quote.serviceable.ok ? quote.serviceable.reason : null
 
   useEffect(() => {
     price()
@@ -94,6 +99,11 @@ export default function CheckoutScreen() {
   async function confirm() {
     if (!location.selected) {
       router.push('/location')
+      return
+    }
+
+    if (unpinned) {
+      router.push({ pathname: '/location', params: { pin: location.selected.id } })
       return
     }
 
@@ -152,6 +162,13 @@ export default function CheckoutScreen() {
                 <View style={styles.flex}>
                   <Text style={styles.addressLabel}>{location.selected.label}</Text>
                   <Text style={styles.addressText}>{formatAddress(location.selected)}</Text>
+                  {unpinned ? (
+                    <Text style={styles.addressWarning}>
+                      This address has no map pin. Tap Change to pin it before ordering.
+                    </Text>
+                  ) : outOfRange ? (
+                    <Text style={styles.addressWarning}>{outOfRange}</Text>
+                  ) : null}
                 </View>
               </View>
             ) : (
@@ -210,7 +227,7 @@ export default function CheckoutScreen() {
                   {line.item.name}
                 </Text>
                 <Text style={styles.summaryValue}>
-                  ₹{((line.item.price + line.addOns.reduce((s, a) => s + a.price, 0)) * line.quantity).toFixed(0)}
+                  {formatMoney((line.item.price + line.addOns.reduce((s, a) => s + a.price, 0)) * line.quantity)}
                 </Text>
               </View>
             ))}
@@ -224,12 +241,11 @@ export default function CheckoutScreen() {
             {quote && quote.discount > 0 && (
               <BillRow label="Coupon discount" value={-quote.discount} tone="good" />
             )}
+            {quote && quote.roundOff !== 0 && <BillRow label="Round off" value={quote.roundOff} />}
 
             <View style={styles.billTotal}>
               <Text style={styles.billTotalLabel}>To pay</Text>
-              <Text style={styles.billTotalValue}>
-                {quote ? `₹${quote.total.toFixed(0)}` : '—'}
-              </Text>
+              <Text style={styles.billTotalValue}>{quote ? formatMoney(quote.total) : '—'}</Text>
             </View>
           </View>
 
@@ -247,11 +263,11 @@ export default function CheckoutScreen() {
           <Text style={styles.barLabel}>
             {method === 'cod' ? 'Pay on delivery' : 'Pay now'}
           </Text>
-          <Text style={styles.barValue}>{quote ? `₹${quote.total.toFixed(0)}` : '—'}</Text>
+          <Text style={styles.barValue}>{quote ? formatMoney(quote.total) : '—'}</Text>
         </View>
         <Pressable
-          style={[styles.barButton, (placing || !quote) && styles.disabled]}
-          disabled={placing || !quote}
+          style={[styles.barButton, (placing || !quote || !!outOfRange) && styles.disabled]}
+          disabled={placing || !quote || !!outOfRange}
           onPress={confirm}
         >
           {placing ? (
@@ -272,7 +288,7 @@ function BillRow({ label, value, tone }: { label: string; value?: number; tone?:
     <View style={styles.billRow}>
       <Text style={styles.billLabel}>{label}</Text>
       <Text style={[styles.billValue, tone === 'good' && styles.billValueGood]}>
-        {value === undefined ? '—' : `${value < 0 ? '−' : ''}₹${Math.abs(value).toFixed(0)}`}
+        {value === undefined ? '—' : formatMoney(value)}
       </Text>
     </View>
   )
@@ -298,6 +314,7 @@ const styles = StyleSheet.create({
 
   addressRow: { flexDirection: 'row', gap: space.md, alignItems: 'flex-start' },
   addressLabel: { ...type.bodyStrong, color: colors.ink },
+  addressWarning: { ...type.caption, color: colors.danger, marginTop: space.xs, fontWeight: '600' },
   addressText: { ...type.small, color: colors.muted, marginTop: 2 },
   addAddress: {
     flexDirection: 'row',

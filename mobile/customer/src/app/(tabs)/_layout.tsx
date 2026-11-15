@@ -1,5 +1,6 @@
 import { Feather } from '@expo/vector-icons'
 import { Tabs } from 'expo-router'
+import { Platform } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { colors, type } from '@/theme'
@@ -11,6 +12,8 @@ export default function TabLayout() {
   // over the bottom of the app. The tab bar grows by that much, so its
   // buttons sit above the phone's instead of underneath them.
   const insets = useSafeAreaInsets()
+  // Browsers lay the label out a little taller, which clipped it at 60.
+  const barHeight = Platform.OS === 'web' ? 68 : 60
 
   return (
     <Tabs
@@ -21,7 +24,7 @@ export default function TabLayout() {
         tabBarStyle: {
           backgroundColor: colors.surface,
           borderTopColor: colors.line,
-          height: 60 + insets.bottom,
+          height: barHeight + insets.bottom,
           paddingTop: 6,
           paddingBottom: 8 + insets.bottom,
         },

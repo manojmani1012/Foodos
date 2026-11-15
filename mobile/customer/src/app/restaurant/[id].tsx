@@ -15,6 +15,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { useCart } from '@/lib/CartContext'
 import { useDish } from '@/lib/DishContext'
+import { useLocation } from '@/lib/LocationContext'
 import { fetchRestaurant, type MenuCategory, type MenuItem, type Restaurant } from '@/lib/catalogue'
 import { colors, radius, shadow, space, type } from '@/theme'
 
@@ -26,6 +27,7 @@ export default function RestaurantScreen() {
   const insets = useSafeAreaInsets()
   const cart = useCart()
   const dishes = useDish()
+  const location = useLocation()
 
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null)
   const [categories, setCategories] = useState<MenuCategory[]>([])
@@ -43,7 +45,7 @@ export default function RestaurantScreen() {
     try {
       // One request brings the restaurant, every category, every dish and every
       // add-on.
-      const data = await fetchRestaurant(id)
+      const data = await fetchRestaurant(id, location.point)
 
       setRestaurant(data.restaurant)
       setCategories(data.categories)
@@ -53,7 +55,7 @@ export default function RestaurantScreen() {
     } finally {
       setLoading(false)
     }
-  }, [id])
+  }, [id, location.point?.latitude, location.point?.longitude])
 
   useEffect(() => {
     load()
@@ -273,6 +275,14 @@ function RestaurantHero({ restaurant }: { restaurant: Restaurant }) {
         {!restaurant.isAcceptingOrders && (
           <View style={styles.closedBanner}>
             <Text style={styles.closedText}>Not accepting orders right now</Text>
+          </View>
+        )}
+
+        {restaurant.deliversHere === false && (
+          <View style={styles.closedBanner}>
+            <Text style={styles.closedText}>
+              Does not deliver to your address{restaurant.distanceKm != null ? ` (${restaurant.distanceKm} km away)` : ''}
+            </Text>
           </View>
         )}
       </View>

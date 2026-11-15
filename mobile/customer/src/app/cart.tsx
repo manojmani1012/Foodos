@@ -13,6 +13,8 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { useCart } from '@/lib/CartContext'
+import { formatMoney } from '@/lib/catalogue'
+import { useLocation } from '@/lib/LocationContext'
 import { quoteCart, type Quote } from '@/lib/orders'
 import { colors, radius, shadow, space, type } from '@/theme'
 
@@ -20,6 +22,8 @@ export default function CartScreen() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
   const cart = useCart()
+  const location = useLocation()
+  const addressId = location.selected?.id ?? null
 
   const [coupon, setCoupon] = useState('')
   const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null)
@@ -39,14 +43,14 @@ export default function CartScreen() {
     setError('')
 
     try {
-      setQuote(await quoteCart(cart.lines, appliedCoupon))
+      setQuote(await quoteCart(cart.lines, appliedCoupon, addressId))
     } catch (priceError: any) {
       setError(priceError.message || 'Could not price your cart')
       setQuote(null)
     } finally {
       setPricing(false)
     }
-  }, [cart.lines, appliedCoupon])
+  }, [cart.lines, appliedCoupon, addressId])
 
   useEffect(() => {
     price()
@@ -185,21 +189,29 @@ export default function CartScreen() {
               {quote && quote.discount > 0 && (
                 <BillRow label="Coupon discount" value={-quote.discount} tone="good" />
               )}
+              {quote && quote.roundOff !== 0 && <BillRow label="Round off" value={quote.roundOff} />}
               <View style={styles.billTotal}>
                 <Text style={styles.billTotalLabel}>To pay</Text>
-                <Text style={styles.billTotalValue}>
-                  {quote ? `₹${quote.total.toFixed(0)}` : '—'}
-                </Text>
+                <Text style={styles.billTotalValue}>{quote ? formatMoney(quote.total) : '—'}</Text>
               </View>
             </View>
           )}
+
+          {quote?.serviceable && !quote.serviceable.ok ? (
+            <View style={styles.billError}>
+              <Text style={styles.billErrorText}>{quote.serviceable.reason}</Text>
+              <Pressable style={styles.primaryGhost} onPress={() => router.push('/location')}>
+                <Text style={styles.primaryGhostText}>Change address</Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
       </ScrollView>
 
       <View style={[styles.bar, { paddingBottom: space.md + insets.bottom }]}>
         <View style={styles.flex}>
           <Text style={styles.barLabel}>Total</Text>
-          <Text style={styles.barValue}>{quote ? `₹${quote.total.toFixed(0)}` : '—'}</Text>
+          <Text style={styles.barValue}>{quote ? formatMoney(quote.total) : '—'}</Text>
         </View>
         <Pressable
           style={[styles.barButton, (!quote || pricing) && styles.disabled]}
@@ -266,7 +278,7 @@ function BillRow({
     <View style={styles.billRow}>
       <Text style={styles.billLabel}>{label}</Text>
       <Text style={[styles.billValue, tone === 'good' && styles.billValueGood]}>
-        {value === undefined ? '—' : `${value < 0 ? '−' : ''}₹${Math.abs(value).toFixed(0)}`}
+        {value === undefined ? '—' : formatMoney(value)}
       </Text>
     </View>
   )

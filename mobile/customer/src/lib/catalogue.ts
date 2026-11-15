@@ -31,6 +31,24 @@ export function rupees(paise: number): number {
   return Math.round(paise) / 100
 }
 
+// "₹146", or "₹5.50" when there are paise. Bills round to whole rupees, but
+// GST on its own line can still have paise, and must not be shown rounded.
+export function formatMoney(value: number): string {
+  const sign = value < 0 ? '−' : ''
+  const amount = Math.abs(value)
+  const whole = Math.round(amount * 100) % 100 === 0
+
+  return `${sign}₹${whole ? amount.toFixed(0) : amount.toFixed(2)}`
+}
+
+// The customer's delivery pin, sent with browsing calls so only restaurants
+// that deliver there are listed.
+export type Point = { latitude: number; longitude: number }
+
+function pin(point: Point | null | undefined) {
+  return point ? { latitude: point.latitude, longitude: point.longitude } : {}
+}
+
 function artFor(text: string): [string, string] {
   const match = CUISINE_ART.find(([pattern]) => pattern.test(text))
 
@@ -51,6 +69,9 @@ export type Restaurant = {
   address: string
   isAcceptingOrders: boolean
   isFavourite: boolean
+  // Known when the customer's pin was sent. A favourite can be out of range.
+  distanceKm: number | null
+  deliversHere: boolean | null
 }
 
 export function mapRestaurant(api: any): Restaurant {
@@ -71,6 +92,8 @@ export function mapRestaurant(api: any): Restaurant {
     address: [api.addressLine, api.city].filter(Boolean).join(', '),
     isAcceptingOrders: api.isAcceptingOrders,
     isFavourite: api.isFavourite,
+    distanceKm: api.distanceKm ?? null,
+    deliversHere: api.deliversHere ?? null,
   }
 }
 
@@ -89,9 +112,10 @@ function query(params: Record<string, string | number | boolean | undefined | nu
 }
 
 export async function fetchRestaurants(
-  options: { search?: string; cuisine?: string; city?: string } = {},
+  options: { search?: string; cuisine?: string; city?: string; point?: Point | null } = {},
 ): Promise<{ restaurants: Restaurant[]; total: number }> {
-  const body = await request(`/api/v1/customer/restaurants${query(options)}`)
+  const { point, ...rest } = options
+  const body = await request(`/api/v1/customer/restaurants${query({ ...rest, ...pin(point) })}`)
 
   return {
     restaurants: body.restaurants.map(mapRestaurant),
@@ -99,8 +123,8 @@ export async function fetchRestaurants(
   }
 }
 
-export async function fetchCuisines(): Promise<{ id: string; label: string; emoji: string }[]> {
-  const body = await request('/api/v1/customer/cuisines')
+export async function fetchCuisines(point?: Point | null): Promise<{ id: string; label: string; emoji: string }[]> {
+  const body = await request(`/api/v1/customer/cuisines${query(pin(point))}`)
 
   return body.cuisines.map((name: string) => {
     const [emoji] = artFor(name)
@@ -207,8 +231,9 @@ export function mapMenuItem(api: any, categoryName?: string): MenuItem {
 
 export async function fetchRestaurant(
   id: string,
+  point?: Point | null,
 ): Promise<{ restaurant: Restaurant; categories: MenuCategory[] }> {
-  const body = await request(`/api/v1/customer/restaurants/${id}`)
+  const body = await request(`/api/v1/customer/restaurants/${id}${query(pin(point))}`)
 
   return {
     restaurant: mapRestaurant(body),

@@ -5,13 +5,17 @@ import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from '
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { useAuth } from '@/lib/AuthContext'
-import { removeFavourite, type Restaurant } from '@/lib/catalogue'
+import { removeFavourite, type Point, type Restaurant } from '@/lib/catalogue'
 import { request } from '@/lib/apiClient'
 import { mapRestaurant } from '@/lib/catalogue'
+import { useLocation } from '@/lib/LocationContext'
 import { colors, radius, shadow, space, type } from '@/theme'
 
-async function fetchFavourites(): Promise<Restaurant[]> {
-  const body = await request('/api/v1/customer/favourites')
+// Every saved restaurant, marked when it does not deliver to the address
+// chosen now (a favourite near home, seen from the office).
+async function fetchFavourites(point: Point | null): Promise<Restaurant[]> {
+  const near = point ? `?latitude=${point.latitude}&longitude=${point.longitude}` : ''
+  const body = await request(`/api/v1/customer/favourites${near}`)
 
   return body.restaurants.map(mapRestaurant)
 }
@@ -19,6 +23,7 @@ async function fetchFavourites(): Promise<Restaurant[]> {
 export default function FavouritesScreen() {
   const router = useRouter()
   const { isSignedIn } = useAuth()
+  const { point } = useLocation()
 
   const [restaurants, setRestaurants] = useState<Restaurant[]>([])
   const [loading, setLoading] = useState(true)
@@ -33,13 +38,13 @@ export default function FavouritesScreen() {
     setError('')
 
     try {
-      setRestaurants(await fetchFavourites())
+      setRestaurants(await fetchFavourites(point))
     } catch (loadError: any) {
       setError(loadError.message || 'Could not load your favourites')
     } finally {
       setLoading(false)
     }
-  }, [isSignedIn])
+  }, [isSignedIn, point])
 
   useFocusEffect(
     useCallback(() => {
@@ -87,7 +92,11 @@ export default function FavouritesScreen() {
               </Text>
               <Text style={styles.meta}>
                 ★ {item.rating} · {item.eta}
+                {item.distanceKm != null ? ` · ${item.distanceKm} km` : ''}
               </Text>
+              {item.deliversHere === false ? (
+                <Text style={styles.outOfRange}>Does not deliver to your address</Text>
+              ) : null}
             </View>
 
             <Pressable onPress={() => unfavourite(item)} hitSlop={12} style={styles.heart}>
@@ -127,6 +136,7 @@ export default function FavouritesScreen() {
 }
 
 const styles = StyleSheet.create({
+  outOfRange: { ...type.caption, color: colors.warning, fontWeight: '600', marginTop: 2 },
   screen: { flex: 1, backgroundColor: colors.ground },
   flex: { flex: 1 },
   header: { paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.sm },
