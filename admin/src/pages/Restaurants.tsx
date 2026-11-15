@@ -72,7 +72,7 @@ export default function Restaurants() {
             ) : (
               <>
                 <div className="table-wrap">
-                  <table className="table clickable">
+                  <table className="table clickable stack-on-phone">
                     <thead>
                       <tr>
                         <th>Restaurant</th>
@@ -87,7 +87,7 @@ export default function Restaurants() {
                     <tbody>
                       {data.restaurants.map((restaurant) => (
                         <tr key={restaurant.id} onClick={() => navigate(`/restaurants/${restaurant.id}`)}>
-                          <td>
+                          <td data-label="Restaurant">
                             <div className="with-thumb">
                               {restaurant.imageUrl ? (
                                 <img className="thumb" src={mediaUrl(restaurant.imageUrl)!} alt="" loading="lazy" />
@@ -106,11 +106,11 @@ export default function Restaurants() {
                               </div>
                             </div>
                           </td>
-                          <td>
+                          <td data-label="Owner">
                             {restaurant.owner.name || '—'}
                             <div className="sub">{formatPhone(restaurant.owner.phone)}</div>
                           </td>
-                          <td>
+                          <td data-label="Status">
                             <StatusBadge map={RESTAURANT_STATUS} value={restaurant.status} />
                             {restaurant.status === 'active' && !restaurant.isAcceptingOrders && (
                               <div className="sub">
@@ -119,14 +119,14 @@ export default function Restaurants() {
                             )}
                             {!restaurant.hasLocation && (
                               <div className="sub">
-                                <Badge tone="warning">No map pin</Badge>
+                                <Badge tone="danger">No map pin: hidden from customers</Badge>
                               </div>
                             )}
                           </td>
-                          <td className="num">{restaurant.menuItems}</td>
-                          <td className="num">{restaurant.deliveredLast30Days}</td>
-                          <td className="num">{restaurant.commissionPct}%</td>
-                          <td>{formatDate(restaurant.createdAt)}</td>
+                          <td className="num" data-label="Dishes">{restaurant.menuItems}</td>
+                          <td className="num" data-label="Delivered (30 days)">{restaurant.deliveredLast30Days}</td>
+                          <td className="num" data-label="Commission">{restaurant.commissionPct}%</td>
+                          <td data-label="Added">{formatDate(restaurant.createdAt)}</td>
                         </tr>
                       ))}
                     </tbody>

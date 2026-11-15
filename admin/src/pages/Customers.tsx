@@ -53,7 +53,7 @@ export default function Customers() {
             ) : (
               <>
                 <div className="table-wrap">
-                  <table className="table clickable">
+                  <table className="table clickable stack-on-phone">
                     <thead>
                       <tr>
                         <th>Customer</th>
@@ -66,17 +66,17 @@ export default function Customers() {
                     <tbody>
                       {data.customers.map((customer) => (
                         <tr key={customer.id} onClick={() => navigate(`/customers/${customer.id}`)}>
-                          <td>
+                          <td data-label="Customer">
                             <Link to={`/customers/${customer.id}`} onClick={(e) => e.stopPropagation()}>
                               {customer.name || 'No name yet'}
                             </Link>{' '}
                             {customer.blocked && <Badge tone="danger">Blocked</Badge>}
                             <div className="sub">{formatPhone(customer.phone)}</div>
                           </td>
-                          <td className="num">{customer.orders}</td>
-                          <td className="num">{formatMoney(customer.spentPaise, { whole: true })}</td>
-                          <td>{customer.lastOrderAt ? timeAgo(customer.lastOrderAt) : <span className="muted">No orders</span>}</td>
-                          <td>{formatDate(customer.joinedAt)}</td>
+                          <td className="num" data-label="Orders">{customer.orders}</td>
+                          <td className="num" data-label="Spent">{formatMoney(customer.spentPaise, { whole: true })}</td>
+                          <td data-label="Last order">{customer.lastOrderAt ? timeAgo(customer.lastOrderAt) : <span className="muted">No orders</span>}</td>
+                          <td data-label="Joined">{formatDate(customer.joinedAt)}</td>
                         </tr>
                       ))}
                     </tbody>

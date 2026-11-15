@@ -67,7 +67,7 @@ export default function Riders() {
             ) : (
               <>
                 <div className="table-wrap">
-                  <table className="table clickable">
+                  <table className="table clickable stack-on-phone">
                     <thead>
                       <tr>
                         <th>Rider</th>
@@ -82,18 +82,18 @@ export default function Riders() {
                     <tbody>
                       {data.riders.map((rider) => (
                         <tr key={rider.id} onClick={() => navigate(`/riders/${rider.id}`)}>
-                          <td>
+                          <td data-label="Rider">
                             <Link to={`/riders/${rider.id}`} onClick={(e) => e.stopPropagation()}>
                               {rider.name || 'No name yet'}
                             </Link>
                             <div className="sub">{formatPhone(rider.phone)}</div>
                           </td>
-                          <td>{rider.city || <Badge tone="warning">Not set</Badge>}</td>
-                          <td>
+                          <td data-label="City">{rider.city || <Badge tone="warning">Not set</Badge>}</td>
+                          <td data-label="Vehicle">
                             {VEHICLE[rider.vehicleType] || rider.vehicleType}
                             <div className="sub mono">{rider.vehicleNumber || 'No number'}</div>
                           </td>
-                          <td>
+                          <td data-label="Status">
                             <StatusBadge map={PARTNER_STATUS} value={rider.status} />
                             {rider.accountBlocked && (
                               <div className="sub">
@@ -101,7 +101,7 @@ export default function Riders() {
                               </div>
                             )}
                           </td>
-                          <td>
+                          <td data-label="Right now">
                             {rider.carryingOrder ? (
                               <Badge tone="progress">On {rider.carryingOrder}</Badge>
                             ) : rider.isOnline ? (
@@ -111,11 +111,11 @@ export default function Riders() {
                             )}
                             {rider.lastSeenAt && <div className="sub">Location {timeAgo(rider.lastSeenAt)}</div>}
                           </td>
-                          <td className="num">
+                          <td className="num" data-label="Deliveries">
                             {rider.deliveries}
                             <div className="sub">{rider.deliveriesToday} today</div>
                           </td>
-                          <td>{formatDate(rider.joinedAt)}</td>
+                          <td data-label="Joined">{formatDate(rider.joinedAt)}</td>
                         </tr>
                       ))}
                     </tbody>

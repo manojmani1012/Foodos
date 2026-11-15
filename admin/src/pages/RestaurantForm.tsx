@@ -21,6 +21,7 @@ type Form = {
   gstNumber: string
   commissionPct: string
   avgPrepMinutes: string
+  deliveryRadiusKm: string
   location: { latitude: number; longitude: number } | null
 }
 
@@ -39,6 +40,7 @@ const EMPTY: Form = {
   gstNumber: '',
   commissionPct: '20',
   avgPrepMinutes: '30',
+  deliveryRadiusKm: '',
   location: null,
 }
 
@@ -58,6 +60,7 @@ function fromRestaurant(restaurant: Restaurant): Form {
     gstNumber: restaurant.gstNumber || '',
     commissionPct: String(restaurant.commissionPct),
     avgPrepMinutes: String(restaurant.avgPrepMinutes),
+    deliveryRadiusKm: restaurant.deliveryRadiusKm !== null ? String(restaurant.deliveryRadiusKm) : '',
     location:
       restaurant.latitude !== null && restaurant.longitude !== null
         ? { latitude: restaurant.latitude, longitude: restaurant.longitude }
@@ -93,9 +96,16 @@ export default function RestaurantForm() {
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    setSaving(true)
     setError('')
     setFieldErrors({})
+
+    // Riders navigate to the pin, and it decides who the outlet delivers to.
+    if (!form.location) {
+      setFieldErrors({ latitude: 'Put the restaurant on the map: click its building, or paste its coordinates' })
+      return
+    }
+
+    setSaving(true)
 
     const body: Record<string, unknown> = {
       name: form.name.trim(),
@@ -110,8 +120,9 @@ export default function RestaurantForm() {
       gstNumber: form.gstNumber.trim() || null,
       commissionPct: Number(form.commissionPct),
       avgPrepMinutes: Number(form.avgPrepMinutes),
-      latitude: form.location?.latitude ?? null,
-      longitude: form.location?.longitude ?? null,
+      deliveryRadiusKm: form.deliveryRadiusKm.trim() ? Number(form.deliveryRadiusKm) : null,
+      latitude: form.location.latitude,
+      longitude: form.location.longitude,
       ownerName: form.ownerName.trim(),
     }
 
@@ -214,7 +225,7 @@ export default function RestaurantForm() {
               {(fieldId) => <input id={fieldId} className="input" value={form.addressLine} required onChange={(e) => set('addressLine', e.target.value)} />}
             </Field>
             <div className="form-grid two">
-              <Field label="City" hint="Riders are offered orders in their own city." error={fieldErrors.city}>
+              <Field label="City" hint="Shown to customers and used in reports." error={fieldErrors.city}>
                 {(fieldId) => <input id={fieldId} className="input" value={form.city} required onChange={(e) => set('city', e.target.value)} />}
               </Field>
               <Field label="PIN code" error={fieldErrors.pincode}>
@@ -222,10 +233,10 @@ export default function RestaurantForm() {
               </Field>
             </div>
           </div>
-          <p className="field-label">Map pin</p>
+          <p className="field-label">Map pin (required)</p>
           <p className="muted small">
-            Riders navigate to this pin and delivery distance is measured from it. Without one, riders get only the address
-            text.
+            Riders navigate to this pin, nearby riders are offered its orders, and only customers within its delivery
+            radius can order. Put it on the building's entrance.
           </p>
           {(fieldErrors.latitude || fieldErrors.longitude) && <p className="field-error">{fieldErrors.latitude || fieldErrors.longitude}</p>}
           <MapPicker value={form.location} onChange={(location) => set('location', location)} />
@@ -247,6 +258,15 @@ export default function RestaurantForm() {
             <Field label="Usual preparation time (minutes)" hint="Used for the delivery time customers see." error={fieldErrors.avgPrepMinutes}>
               {(fieldId) => (
                 <input id={fieldId} className="input" type="number" min={5} max={120} value={form.avgPrepMinutes} onChange={(e) => set('avgPrepMinutes', e.target.value)} />
+              )}
+            </Field>
+            <Field
+              label="Delivery radius (km)"
+              hint="Customers further than this from the pin cannot order. Leave blank for the Foodos default (7 km)."
+              error={fieldErrors.deliveryRadiusKm}
+            >
+              {(fieldId) => (
+                <input id={fieldId} className="input" type="number" min={1} max={30} step={0.5} placeholder="7" value={form.deliveryRadiusKm} onChange={(e) => set('deliveryRadiusKm', e.target.value)} />
               )}
             </Field>
           </div>

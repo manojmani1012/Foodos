@@ -150,3 +150,11 @@ export const VEHICLE: Record<string, string> = {
   bicycle: 'Bicycle',
   ev: 'Electric',
 }
+
+// Who cancelled an order, as the panel says it.
+export function cancelledByLabel(by: string | null) {
+  if (by === 'admin') return 'Foodos'
+  if (by === 'system') return 'Foodos (automatic)'
+
+  return by || 'unknown'
+}

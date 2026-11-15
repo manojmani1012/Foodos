@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { RiderFinder } from '../components/RiderFinder'
 import { Badge, Card, ConfirmDialog, Details, ErrorBox, Loadable, PageHeader, StatusBadge } from '../components/ui'
 import { api } from '../lib/api'
 import {
+  cancelledByLabel,
   DELIVERY_STATUS,
   formatDateTime,
   formatMoney,
@@ -19,6 +21,10 @@ import type { Order } from '../lib/types'
 import { useLoad } from '../lib/useLoad'
 
 const LIVE = ['pending', 'confirmed', 'preparing', 'ready', 'picked_up', 'on_the_way']
+
+// Minutes without a rider before the page raises it, then insists.
+const RIDER_WAIT_WARN = 5
+const RIDER_WAIT_URGENT = 20
 
 export default function OrderDetail() {
   const { id = '' } = useParams()
@@ -70,7 +76,16 @@ export default function OrderDetail() {
     <Loadable state={state}>
       {(order) => {
         const address = order.deliveryAddress || {}
-        const addressText = [address.line1, address.line2, address.city, address.pincode].filter(Boolean).join(', ')
+        const addressText = [
+          address.line1,
+          address.line2,
+          address.landmark ? `near ${address.landmark}` : null,
+          address.city,
+          address.pincode,
+        ]
+          .filter(Boolean)
+          .join(', ')
+        const waited = order.deliveryStatus === 'searching' ? order.riderWaitMinutes ?? 0 : 0
         const isLive = LIVE.includes(order.status)
 
         return (
@@ -94,9 +109,17 @@ export default function OrderDetail() {
 
             {order.status === 'cancelled' && (
               <div className="notice notice-danger">
-                Cancelled {formatDateTime(order.cancelledAt)} by{' '}
-                {order.cancelledBy === 'admin' ? 'Foodos' : order.cancelledBy || 'unknown'}
+                Cancelled {formatDateTime(order.cancelledAt)} by {cancelledByLabel(order.cancelledBy)}
                 {order.cancellationReason ? `: "${order.cancellationReason}"` : ''}
+              </div>
+            )}
+
+            {waited >= RIDER_WAIT_WARN && (
+              <div className={`notice ${waited >= RIDER_WAIT_URGENT ? 'notice-danger' : 'notice-warning'}`}>
+                <strong>No rider for {waited} minutes.</strong>{' '}
+                {waited >= RIDER_WAIT_URGENT
+                  ? 'Assign a rider below now, or cancel the order so the customer is not left waiting.'
+                  : 'Nobody nearby has taken it. Assign a rider below.'}
               </div>
             )}
 
@@ -162,6 +185,15 @@ export default function OrderDetail() {
                         <tr>
                           <td>Discount</td>
                           <td className="num">−{formatMoney(order.discountPaise)}</td>
+                        </tr>
+                      )}
+                      {order.roundOffPaise !== 0 && (
+                        <tr>
+                          <td>Round off</td>
+                          <td className="num">
+                            {order.roundOffPaise < 0 ? '−' : ''}
+                            {formatMoney(Math.abs(order.roundOffPaise))}
+                          </td>
                         </tr>
                       )}
                       <tr className="total">
@@ -255,8 +287,20 @@ export default function OrderDetail() {
                       ],
                       ['Phone', <a key="p" href={`tel:${order.customer.phone}`}>{formatPhone(order.customer.phone)}</a>],
                       ['Deliver to', addressText || '—'],
+                      ...(order.deliveryCode
+                        ? ([['Delivery code', <span key="code" className="code-chip">{order.deliveryCode}</span>]] as [
+                            string,
+                            ReactNode,
+                          ][])
+                        : []),
                     ]}
                   />
+                  {order.deliveryCode && (
+                    <p className="muted small">
+                      The rider needs this code to mark the order delivered. Give it to them only after checking with the
+                      customer.
+                    </p>
+                  )}
                   {order.customer.blocked && <Badge tone="danger">Account blocked</Badge>}
                 </Card>
 
@@ -281,7 +325,13 @@ export default function OrderDetail() {
                     <Details
                       rows={[
                         ['Name', <Link key="d" to={`/riders/${order.rider.id}`}>{order.rider.name || 'No name'}</Link>],
-                        ['Phone', <a key="t" href={`tel:${order.rider.phone}`}>{formatPhone(order.rider.phone)}</a>],
+                        [
+                          'Phone',
+                          <span key="t">
+                            <a href={`tel:${order.rider.phone}`}>{formatPhone(order.rider.phone)}</a>
+                            {order.rider.city ? ` · ${order.rider.city}` : ''}
+                          </span>,
+                        ],
                         ['Status', DELIVERY_STATUS[order.rider.deliveryStatus] || order.rider.deliveryStatus],
                         [
                           'Rider pay',
@@ -291,7 +341,9 @@ export default function OrderDetail() {
                     />
                   ) : order.deliveryStatus === 'searching' ? (
                     <p className="muted">
-                      Offered to riders online in the city since the restaurant accepted. Nobody has taken it yet.
+                      Offered to the nearest free riders, one at a time, since the restaurant accepted
+                      {order.riderWaitMinutes !== null ? ` ${order.riderWaitMinutes} min ago` : ''}. Nobody has taken it
+                      yet.
                     </p>
                   ) : (
                     <p className="muted">
@@ -301,6 +353,13 @@ export default function OrderDetail() {
                           ? 'No rider has been requested for this order.'
                           : 'No rider was assigned.'}
                     </p>
+                  )}
+
+                  {order.actions.canAssignRider && (
+                    <>
+                      {order.rider && <h3 className="subhead">Move to another rider</h3>}
+                      <RiderFinder order={order} onAssigned={state.setData} />
+                    </>
                   )}
                 </Card>
 

@@ -187,6 +187,7 @@ export default function RestaurantDetail() {
                         ['GSTIN', restaurant.gstNumber],
                         ['Commission', `${restaurant.commissionPct}% of food value`],
                         ['Preparation time', `${restaurant.avgPrepMinutes} min`],
+                        ['Delivers within', restaurant.deliveryRadiusKm !== null ? `${restaurant.deliveryRadiusKm} km of the pin` : '7 km of the pin (Foodos default)'],
                         [
                           'Opening hours',
                           restaurant.opensAt && restaurant.closesAt ? `${restaurant.opensAt} – ${restaurant.closesAt} (set by owner)` : 'Not set',

@@ -1359,3 +1359,117 @@ textarea.input {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* --- Finding a rider for an order -------------------------------------- */
+
+.stack-sm {
+  display: grid;
+  gap: 10px;
+}
+
+.row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.row-gap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.text-warning {
+  color: var(--warning);
+}
+
+.rider-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.rider-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+}
+
+.rider-option-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.code-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 4px;
+}
+
+/* --- Tables as cards on a phone ------------------------------------------
+   Admins check orders from their phone (all of the UAT videos were shot on
+   one), where a wide table means scrolling sideways for the rider and total.
+   Tables marked stack-on-phone show each row as a card instead, every value
+   labelled from its column. */
+
+@media (max-width: 700px) {
+  .table-wrap > .table.stack-on-phone {
+    min-width: 0;
+  }
+
+  .table.stack-on-phone thead {
+    display: none;
+  }
+
+  .table.stack-on-phone tr {
+    display: block;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  /* The value sits on the right with its own second line under it; the
+     column name is pinned on the left. */
+  .table.stack-on-phone td {
+    display: block;
+    position: relative;
+    min-height: 22px;
+    padding: 3px 0 3px 38%;
+    border: none;
+    text-align: right;
+  }
+
+  .table.stack-on-phone td::before {
+    content: attr(data-label);
+    position: absolute;
+    left: 0;
+    top: 4px;
+    width: 36%;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 400;
+    text-align: left;
+  }
+
+  .table.stack-on-phone td:first-child {
+    font-weight: 600;
+  }
+
+  .rider-option {
+    flex-wrap: wrap;
+  }
+
+  .rider-option-main {
+    flex-basis: 100%;
+  }
+}

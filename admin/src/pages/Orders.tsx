@@ -1,7 +1,17 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { Badge, Card, Empty, Loadable, PageHeader, Pagination, SearchBox, StatusBadge, Tabs } from '../components/ui'
 import { api } from '../lib/api'
-import { DELIVERY_STATUS, formatDateTime, formatMoney, formatPhone, ORDER_STATUS, PAYMENT_METHOD, plural, REFUND_STATUS } from '../lib/format'
+import {
+  cancelledByLabel,
+  DELIVERY_STATUS,
+  formatDateTime,
+  formatMoney,
+  formatPhone,
+  ORDER_STATUS,
+  PAYMENT_METHOD,
+  plural,
+  REFUND_STATUS,
+} from '../lib/format'
 import type { Counts, OrderRow } from '../lib/types'
 import { useLoad } from '../lib/useLoad'
 import { useFilters } from '../lib/useParams'
@@ -84,7 +94,7 @@ export default function Orders() {
             ) : (
               <>
                 <div className="table-wrap">
-                  <table className="table clickable">
+                  <table className="table clickable stack-on-phone">
                     <thead>
                       <tr>
                         <th>Order</th>
@@ -99,19 +109,19 @@ export default function Orders() {
                     <tbody>
                       {data.orders.map((order) => (
                         <tr key={order.id} onClick={() => navigate(`/orders/${order.id}`)}>
-                          <td>
+                          <td data-label="Order">
                             <Link className="mono" to={`/orders/${order.id}`} onClick={(e) => e.stopPropagation()}>
                               {order.orderNumber}
                             </Link>
                             <div className="sub">{plural(order.itemCount, 'item')}</div>
                           </td>
-                          <td>{formatDateTime(order.placedAt)}</td>
-                          <td>{order.restaurant.name}</td>
-                          <td>
+                          <td data-label="Placed">{formatDateTime(order.placedAt)}</td>
+                          <td data-label="Restaurant">{order.restaurant.name}</td>
+                          <td data-label="Customer">
                             {order.customer.name || 'No name yet'}
                             <div className="sub">{formatPhone(order.customer.phone)}</div>
                           </td>
-                          <td>
+                          <td data-label="Status">
                             <StatusBadge map={ORDER_STATUS} value={order.status} />
                             {order.refundStatus && (
                               <div className="sub">
@@ -119,17 +129,32 @@ export default function Orders() {
                               </div>
                             )}
                             {order.status === 'cancelled' && order.cancelledBy && (
-                              <div className="sub">by {order.cancelledBy === 'admin' ? 'Foodos' : order.cancelledBy}</div>
+                              <div className="sub">by {cancelledByLabel(order.cancelledBy)}</div>
                             )}
                           </td>
-                          <td>
-                            {order.riderName ||
-                              (order.deliveryStatus === 'searching' ? <Badge tone="warning">Finding rider</Badge> : '—')}
+                          <td data-label="Rider">
+                            {order.riderName ? (
+                              <>
+                                {order.riderName}
+                                {/* Two riders can share a name. */}
+                                <div className="sub">
+                                  {[order.riderPhone ? `••${order.riderPhone.slice(-4)}` : null, order.riderCity]
+                                    .filter(Boolean)
+                                    .join(' · ')}
+                                </div>
+                              </>
+                            ) : order.deliveryStatus === 'searching' ? (
+                              <Badge tone={(order.riderWaitMinutes ?? 0) >= 5 ? 'danger' : 'warning'}>
+                                Finding rider{order.riderWaitMinutes ? ` · ${order.riderWaitMinutes} min` : ''}
+                              </Badge>
+                            ) : (
+                              '—'
+                            )}
                             {order.riderName && order.deliveryStatus && (
                               <div className="sub">{DELIVERY_STATUS[order.deliveryStatus]}</div>
                             )}
                           </td>
-                          <td className="num">
+                          <td className="num" data-label="Total">
                             {formatMoney(order.totalPaise)}
                             <div className="sub">{PAYMENT_METHOD[order.paymentMethod] || order.paymentMethod}</div>
                           </td>

@@ -65,6 +65,8 @@ export type Restaurant = {
   gstNumber: string | null
   commissionPct: number
   avgPrepMinutes: number
+  // Blank means the platform default (7 km).
+  deliveryRadiusKm: number | null
   rating: number
   ratingCount: number
   status: string
@@ -160,6 +162,11 @@ export type OrderRow = {
   customer: { id: string; name: string | null; phone: string }
   deliveryStatus: string | null
   riderName: string | null
+  // Two riders can share a name; these tell them apart.
+  riderPhone: string | null
+  riderCity: string | null
+  // Minutes the order has been looking for a rider, while it is.
+  riderWaitMinutes: number | null
   refundStatus: string | null
 }
 
@@ -184,6 +191,7 @@ export type Order = {
   taxPaise: number
   tipPaise: number
   discountPaise: number
+  roundOffPaise: number
   totalPaise: number
   paymentMethod: string
   paymentStatus: string
@@ -201,12 +209,16 @@ export type Order = {
     id: string
     name: string | null
     phone: string
+    city: string | null
     deliveryStatus: string
     payPaise: number
     distanceKm: number | null
     acceptedAt: string | null
   } | null
   deliveryStatus: string | null
+  riderWaitMinutes: number | null
+  // The customer's code, for support to read to a rider who cannot get it.
+  deliveryCode: string | null
   commissionPaise: number
   commissionPct: number
   payments: {
@@ -228,7 +240,34 @@ export type Order = {
     requestedAt: string
     processedAt: string | null
   }[]
-  actions: { canCancel: boolean; canRetryRefund: boolean }
+  actions: { canCancel: boolean; canRetryRefund: boolean; canAssignRider: boolean }
+}
+
+export type RiderOption = {
+  id: string
+  name: string | null
+  phone: string
+  city: string | null
+  vehicleType: string | null
+  vehicleNumber: string | null
+  isOnline: boolean
+  distanceKm: number | null
+  latitude: number | null
+  longitude: number | null
+  lastLocationAt: string | null
+  secondsSinceLocation: number | null
+  busyWith: string | null
+  offerStatus: 'sent' | 'accepted' | 'rejected' | 'expired' | null
+  isCurrentRider: boolean
+  canAssign: boolean
+}
+
+export type RidersForOrder = {
+  restaurant: { name: string; latitude: number | null; longitude: number | null }
+  deliveryStatus: string | null
+  minutesWaiting: number | null
+  locationFreshSeconds: number
+  riders: RiderOption[]
 }
 
 export type CustomerRow = {
