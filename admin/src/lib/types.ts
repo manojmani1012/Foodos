@@ -102,6 +102,16 @@ export type MenuCategory = {
   }[]
 }
 
+export type RiderDocument = {
+  type: 'driving_license' | 'vehicle_rc' | 'aadhaar'
+  label: string
+  status: 'missing' | 'pending' | 'verified' | 'rejected'
+  rejectionReason: string | null
+  uploadedAt: string | null
+  // Loads with the admin's sign-in (apiBlob); null until uploaded.
+  fileUrl: string | null
+}
+
 export type RiderRow = {
   id: string
   name: string | null
@@ -134,7 +144,7 @@ export type Rider = Omit<RiderRow, 'deliveries' | 'deliveriesToday' | 'carryingO
     distanceKmLast7Days: number
     cashHeldTodayPaise: number
   }
-  documents: { type: string; url: string; status: string; rejectionReason: string | null; uploadedAt: string }[]
+  documents: RiderDocument[]
   recentDeliveries: {
     id: string
     status: string

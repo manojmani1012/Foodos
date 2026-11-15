@@ -232,7 +232,7 @@ export default function HomeScreen() {
             title={partner?.status === 'pending' ? 'Waiting for approval' : 'Account not active'}
             body={
               partner?.status === 'pending'
-                ? 'Foodos is verifying your details. You can go online and take orders as soon as your account is approved. Meanwhile, add your vehicle details under Profile.'
+                ? 'Foodos is verifying your details. You can go online and take orders as soon as your account is approved. Meanwhile, add your vehicle details and upload your licence, RC and Aadhaar under Profile.'
                 : 'Your account cannot take orders right now. Contact Foodos support.'
             }
           />

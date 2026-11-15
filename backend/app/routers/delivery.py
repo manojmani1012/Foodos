@@ -5,16 +5,17 @@ Every route acts on the signed-in rider only; there is no rider id in any path.
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 
 from ..components.auth.dependencies import CurrentUser, require_role
-from ..components.delivery import service
+from ..components.delivery import documents, service
 from ..components.delivery.schemas import (
     LocationBody,
     OnlineBody,
     PartnerProfileBody,
     StepBody,
 )
+from ..components.media.service import MAX_IMAGE_BYTES
 
 router = APIRouter(prefix="/api/v1/delivery", tags=["delivery"])
 
@@ -43,6 +44,19 @@ async def update_location(body: LocationBody, user: CurrentUser = Depends(rider_
     await service.update_location(user.id, body.latitude, body.longitude)
 
     return {"ok": True}
+
+
+@router.get("/documents")
+async def list_documents(user: CurrentUser = Depends(rider_only)):
+    return {"ok": True, "documents": await documents.list_documents(user.id)}
+
+
+@router.post("/documents/{doc_type}")
+async def upload_document(doc_type: str, file: UploadFile = File(...), user: CurrentUser = Depends(rider_only)):
+    # One byte past the limit is enough to tell "too big" without reading it all.
+    data = await file.read(MAX_IMAGE_BYTES + 1)
+
+    return {"ok": True, "documents": await documents.upload(user.id, doc_type, data)}
 
 
 @router.get("/requests")

@@ -145,6 +145,22 @@ async function send(path: string, options: Options): Promise<Response> {
   }
 }
 
+// A file behind the admin's sign-in (a rider's licence, say), for showing in
+// an <img> through an object URL.
+export async function apiBlob(path: string): Promise<Blob> {
+  let response = await send(path, {})
+
+  if (response.status === 401 && (await refreshSession())) {
+    response = await send(path, {})
+  }
+
+  if (!response.ok) {
+    throw new ApiError(response.status, 'request_failed', `Could not load the file (${response.status})`)
+  }
+
+  return response.blob()
+}
+
 export async function api<T = any>(path: string, options: Options = {}): Promise<T> {
   let response = await send(path, options)
 

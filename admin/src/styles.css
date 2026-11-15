@@ -1473,3 +1473,31 @@ textarea.input {
     flex-basis: 100%;
   }
 }
+
+/* Rider documents: one row each, and the photo inside the check window. */
+.doc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.doc-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.doc-list li:last-child {
+  border-bottom: 0;
+}
+
+.doc-photo {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  margin: 0 auto 12px;
+  border-radius: var(--radius-small);
+}

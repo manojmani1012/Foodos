@@ -128,6 +128,15 @@ class Settings(BaseSettings):
     # them delivered.
     delivery_code_required: Literal["all", "prepaid", "off"] = "all"
 
+    # The GST invoice. Food ordered through an app is taxed under section 9(5),
+    # so Foodos issues the invoice for the restaurant, with its own legal name,
+    # address and GSTIN. Placeholders until the client sends them; a blank
+    # GSTIN is left off the invoice.
+    invoice_company_name: str = "Foodos"
+    invoice_company_address: str = ""
+    invoice_company_gstin: str = ""
+    invoice_place_of_supply: str = "Tamil Nadu (33)"
+
     # The background loop that expires offers, dispatches riders and cancels
     # unanswered orders. Off in tests, which call each step directly.
     background_jobs_enabled: bool = True

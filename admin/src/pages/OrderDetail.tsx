@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { RiderFinder } from '../components/RiderFinder'
 import { TestBadge } from '../components/TestAccount'
 import { Badge, Card, ConfirmDialog, Details, ErrorBox, Loadable, PageHeader, StatusBadge } from '../components/ui'
-import { api } from '../lib/api'
+import { api, mediaUrl } from '../lib/api'
 import {
   cancelledByLabel,
   DELIVERY_STATUS,
@@ -26,6 +26,20 @@ const LIVE = ['pending', 'confirmed', 'preparing', 'ready', 'picked_up', 'on_the
 // Minutes without a rider before the page raises it, then insists.
 const RIDER_WAIT_WARN = 5
 const RIDER_WAIT_URGENT = 20
+
+// The invoice opens in a new tab through a link that works for 15 minutes. The
+// tab is opened within the click, or the browser would block it.
+async function openInvoice(orderId: string) {
+  const tab = window.open('', '_blank')
+
+  try {
+    const { url } = await api<{ url: string }>(`/api/v1/admin/orders/${orderId}/invoice`, { method: 'POST' })
+    if (tab) tab.location.href = mediaUrl(url) || url
+  } catch (error) {
+    tab?.close()
+    window.alert(error instanceof Error ? error.message : 'Could not open the invoice')
+  }
+}
 
 export default function OrderDetail() {
   const { id = '' } = useParams()
@@ -101,11 +115,18 @@ export default function OrderDetail() {
               }
               subtitle={`Placed ${formatDateTime(order.placedAt)} · ${PAYMENT_METHOD[order.paymentMethod] || order.paymentMethod} · ${formatMoney(order.totalPaise)}`}
               actions={
-                order.actions.canCancel && (
-                  <button className="btn btn-danger" onClick={() => setCancelling(true)}>
-                    Cancel order
-                  </button>
-                )
+                <>
+                  {order.status === 'delivered' && (
+                    <button className="btn" onClick={() => openInvoice(order.id)}>
+                      GST invoice
+                    </button>
+                  )}
+                  {order.actions.canCancel && (
+                    <button className="btn btn-danger" onClick={() => setCancelling(true)}>
+                      Cancel order
+                    </button>
+                  )}
+                </>
               }
             />
 

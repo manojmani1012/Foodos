@@ -1,4 +1,4 @@
-import { request } from './apiClient'
+import { API_BASE_URL, request } from './apiClient'
 import { rupees } from './catalogue'
 import type { CartLine } from './CartContext'
 
@@ -31,6 +31,8 @@ export type Quote = {
   packagingFee: number
   tax: number
   discount: number
+  // For the delivery partner, all of it.
+  tip: number
   // The bill rounds to whole rupees; this is the difference, shown as its own line.
   roundOff: number
   total: number
@@ -43,10 +45,11 @@ export async function quoteCart(
   lines: CartLine[],
   couponCode?: string | null,
   addressId?: string | null,
+  tipPaise = 0,
 ): Promise<Quote> {
   const body = await request('/api/v1/customer/cart/quote', {
     method: 'POST',
-    body: { items: toCartItems(lines), couponCode: couponCode || null, addressId: addressId || null },
+    body: { items: toCartItems(lines), couponCode: couponCode || null, addressId: addressId || null, tipPaise },
   })
 
   return {
@@ -56,6 +59,7 @@ export async function quoteCart(
     packagingFee: rupees(body.packagingFeePaise),
     tax: rupees(body.taxPaise),
     discount: rupees(body.discountPaise),
+    tip: rupees(body.tipPaise ?? 0),
     roundOff: rupees(body.roundOffPaise ?? 0),
     total: rupees(body.totalPaise),
     coupon: body.coupon,
@@ -226,6 +230,7 @@ export async function placeOrder(options: {
   addressId: string
   idempotencyKey: string
   paymentMethod?: string
+  tipPaise?: number
 }): Promise<Order> {
   const body = await request('/api/v1/customer/orders', {
     method: 'POST',
@@ -235,10 +240,19 @@ export async function placeOrder(options: {
       couponCode: options.couponCode || null,
       addressId: options.addressId,
       idempotencyKey: options.idempotencyKey,
+      tipPaise: options.tipPaise ?? 0,
     },
   })
 
   return mapOrder(body.order)
+}
+
+// The order's GST invoice: a page for the browser, behind a link that works
+// for 15 minutes. Only for delivered orders.
+export async function invoiceUrl(orderId: string): Promise<string> {
+  const body = await request(`/api/v1/customer/orders/${orderId}/invoice`, { method: 'POST' })
+
+  return `${API_BASE_URL}${body.url}`
 }
 
 export async function fetchOrder(id: string): Promise<Order> {

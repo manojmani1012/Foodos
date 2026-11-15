@@ -23,6 +23,8 @@ class QuoteBody(BaseModel):
     # The address the cart is heading to, so the cart can say up front when
     # the restaurant does not deliver there.
     addressId: Optional[str] = None
+    # The rider's tip, chosen at checkout; all of it goes to the rider.
+    tipPaise: int = Field(default=0, ge=0, le=100000)
 
 
 class AddressBody(BaseModel):

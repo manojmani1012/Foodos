@@ -1,9 +1,11 @@
 import { Feather } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
+import * as WebBrowser from 'expo-web-browser'
 import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,7 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { TrackingMap } from '@/components/TrackingMap'
 import { formatMoney } from '@/lib/catalogue'
-import { cancelOrder, fetchOrder, formatAddress, type Order, type Tracking } from '@/lib/orders'
+import { cancelOrder, fetchOrder, formatAddress, invoiceUrl, type Order, type Tracking } from '@/lib/orders'
 import { fetchOrderReview, reviewOrder } from '@/lib/profile'
 import { colors, radius, shadow, space, type } from '@/theme'
 
@@ -63,6 +65,7 @@ export default function OrderScreen() {
   const [order, setOrder] = useState<Order | null>(null)
   const [loading, setLoading] = useState(true)
   const [cancelling, setCancelling] = useState(false)
+  const [invoiceError, setInvoiceError] = useState('')
   const [error, setError] = useState('')
   const [review, setReview] = useState<{ rating: number; comment: string | null } | null>(null)
   const [rating, setRating] = useState(0)
@@ -134,6 +137,27 @@ export default function OrderScreen() {
   const reached = new Map(order.timeline.map(step => [step.status, step.at]))
   const currentIndex = STEPS.reduce((last, step, index) => (reached.has(step.key) ? index : last), -1)
   const cancelled = order.status === 'cancelled'
+
+  async function openInvoice() {
+    if (!order) return
+
+    setInvoiceError('')
+    // On the web the new tab has to open within the tap, or the browser blocks it.
+    const tab = Platform.OS === 'web' ? (globalThis as any).open('', '_blank') : null
+
+    try {
+      const url = await invoiceUrl(order.id)
+
+      if (tab) {
+        tab.location.href = url
+      } else {
+        await WebBrowser.openBrowserAsync(url)
+      }
+    } catch (openError: any) {
+      tab?.close()
+      setInvoiceError(openError.message || 'Could not open the invoice')
+    }
+  }
 
   async function cancel() {
     setCancelling(true)
@@ -329,6 +353,15 @@ export default function OrderScreen() {
             </Text>
             <Text style={styles.billTotalValue}>{formatMoney(order.total)}</Text>
           </View>
+
+          {order.status === 'delivered' && (
+            <Pressable style={styles.invoice} onPress={openInvoice} accessibilityRole="link">
+              <Feather name="file-text" size={16} color={colors.brand} />
+              <Text style={styles.invoiceText}>GST invoice</Text>
+              <Feather name="external-link" size={14} color={colors.brand} />
+            </Pressable>
+          )}
+          {invoiceError ? <Text style={styles.invoiceError}>{invoiceError}</Text> : null}
         </View>
 
         <View style={styles.card}>
@@ -733,6 +766,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   reorderText: { ...type.bodyStrong, color: colors.brand },
+  invoice: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.md, alignSelf: 'flex-start' },
+  invoiceText: { ...type.smallStrong, color: colors.brand },
+  invoiceError: { ...type.caption, color: colors.danger, marginTop: space.xs },
   ghost: {
     paddingHorizontal: space.xl,
     paddingVertical: space.sm,

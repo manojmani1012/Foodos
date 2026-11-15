@@ -15,6 +15,7 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
+import { DocumentsCard } from '@/components/DocumentsCard'
 import { useAuth } from '@/lib/AuthContext'
 import { API_BASE_URL } from '@/lib/apiClient'
 import { fetchPartner, updatePartner, type Partner, type VehicleType } from '@/lib/delivery'
@@ -205,6 +206,8 @@ export default function ProfileScreen() {
           <Pressable style={[styles.primary, (!changed || saving) && styles.dim]} onPress={save} disabled={!changed || saving}>
             {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save changes</Text>}
           </Pressable>
+
+          <DocumentsCard />
 
           <View style={styles.card}>
             <Text style={styles.cardLabel}>Connected to</Text>

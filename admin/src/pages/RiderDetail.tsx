@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import MapPicker from '../components/Map'
+import { RiderDocuments } from '../components/RiderDocuments'
+import { TestAccountCard, TestBadge } from '../components/TestAccount'
 import { Badge, Card, ConfirmDialog, Details, ErrorBox, Field, Loadable, Modal, PageHeader, Stat, StatusBadge } from '../components/ui'
 import { api } from '../lib/api'
 import {
@@ -11,10 +13,8 @@ import {
   PARTNER_STATUS,
   PAYMENT_METHOD,
   timeAgo,
-  titleCase,
   VEHICLE,
 } from '../lib/format'
-import { TestAccountCard, TestBadge } from '../components/TestAccount'
 import { useToast } from '../lib/toast'
 import type { Rider } from '../lib/types'
 import { useLoad } from '../lib/useLoad'
@@ -161,161 +161,167 @@ export default function RiderDetail() {
 
   return (
     <Loadable state={state}>
-      {(rider) => (
-        <>
-          <PageHeader
-            back={{ to: '/riders', label: 'Riders' }}
-            title={
-              <>
-                {rider.name || 'No name yet'} <StatusBadge map={PARTNER_STATUS} value={rider.status} />{' '}
-                {rider.isOnline && <Badge tone="success">Online</Badge>} {rider.isTest && <TestBadge />}
-              </>
-            }
-            subtitle={`${formatPhone(rider.phone)} · ${rider.city || 'City not set'} · joined ${formatDateTime(rider.joinedAt)}`}
-            actions={
-              <>
-                <button className="btn" onClick={() => setEditing(true)}>
-                  Edit details
-                </button>
-                {actionsFor(rider).map((candidate) => (
-                  <button
-                    key={candidate.status}
-                    className={candidate.danger ? 'btn btn-danger' : 'btn btn-primary'}
-                    onClick={() => setAction(candidate)}
-                  >
-                    {candidate.label}
+      {(rider) => {
+        // Approving still works without them, for riders checked over a call.
+        const unchecked = rider.documents.filter((doc) => doc.status !== 'verified').map((doc) => doc.label)
+
+        return (
+          <>
+            <PageHeader
+              back={{ to: '/riders', label: 'Riders' }}
+              title={
+                <>
+                  {rider.name || 'No name yet'} <StatusBadge map={PARTNER_STATUS} value={rider.status} />{' '}
+                  {rider.isOnline && <Badge tone="success">Online</Badge>} {rider.isTest && <TestBadge />}
+                </>
+              }
+              subtitle={`${formatPhone(rider.phone)} · ${rider.city || 'City not set'} · joined ${formatDateTime(rider.joinedAt)}`}
+              actions={
+                <>
+                  <button className="btn" onClick={() => setEditing(true)}>
+                    Edit details
                   </button>
-                ))}
-              </>
-            }
-          />
-
-          {rider.status === 'pending' && (
-            <div className="notice notice-warning">
-              Before approving, call {formatPhone(rider.phone)} and check their driving licence, vehicle RC and ID. The
-              Delivery app does not collect documents yet.
-              {!rider.city && ' Set their city first: it decides which orders they are offered.'}
-            </div>
-          )}
-          {rider.accountBlocked && (
-            <div className="notice notice-danger">This phone number is blocked under Customers, so it cannot sign in to any Foodos app.</div>
-          )}
-
-          <div className="stats">
-            <Stat label="Deliveries" value={rider.stats.deliveries} hint={`${rider.stats.deliveriesLast7Days} in the last 7 days`} />
-            <Stat label="Earned, last 7 days" value={formatMoney(rider.stats.earnedPaiseLast7Days, { whole: true })} hint={`${rider.stats.distanceKmLast7Days} km`} />
-            <Stat
-              label="Cash held today"
-              value={formatMoney(rider.stats.cashHeldTodayPaise, { whole: true })}
-              hint="Collected at the door; owed to Foodos"
-              tone={rider.stats.cashHeldTodayPaise > 0 ? 'warning' : undefined}
+                  {actionsFor(rider).map((candidate) => (
+                    <button
+                      key={candidate.status}
+                      className={candidate.danger ? 'btn btn-danger' : 'btn btn-primary'}
+                      onClick={() => setAction(candidate)}
+                    >
+                      {candidate.label}
+                    </button>
+                  ))}
+                </>
+              }
             />
-            <Stat label="Rating" value={rider.ratingCount ? rider.rating.toFixed(1) : '—'} hint={rider.ratingCount ? `${rider.ratingCount} ratings` : 'No ratings yet'} />
-          </div>
 
-          <div className="grid-2 align-start">
-            <div className="stack">
-              <Card title="Details">
-                <Details
-                  rows={[
-                    ['Phone', <a key="p" href={`tel:${rider.phone}`}>{formatPhone(rider.phone)}</a>],
-                    ['City', rider.city || <Badge key="c" tone="warning">Not set</Badge>],
-                    ['Vehicle', VEHICLE[rider.vehicleType] || rider.vehicleType],
-                    ['Vehicle number', rider.vehicleNumber],
-                    ['Licence number', rider.licenseNumber],
-                    ['Last signed in', rider.lastSignedInAt ? timeAgo(rider.lastSignedInAt) : 'Never'],
-                  ]}
-                />
-              </Card>
+            {rider.status === 'pending' && (
+              <div className="notice notice-warning">
+                Before approving, check their driving licence, vehicle RC and Aadhaar under Documents, and call{' '}
+                {formatPhone(rider.phone)} if anything is unclear.
+                {!rider.city && ' Set their city first: it decides which orders they are offered.'}
+              </div>
+            )}
+            {rider.accountBlocked && (
+              <div className="notice notice-danger">This phone number is blocked under Customers, so it cannot sign in to any Foodos app.</div>
+            )}
 
-              <Card title="Documents">
-                {rider.documents.length === 0 ? (
-                  <p className="muted">None uploaded. Document upload in the Delivery app is still to come; check them over a call for now.</p>
+            <div className="stats">
+              <Stat label="Deliveries" value={rider.stats.deliveries} hint={`${rider.stats.deliveriesLast7Days} in the last 7 days`} />
+              <Stat label="Earned, last 7 days" value={formatMoney(rider.stats.earnedPaiseLast7Days, { whole: true })} hint={`${rider.stats.distanceKmLast7Days} km`} />
+              <Stat
+                label="Cash held today"
+                value={formatMoney(rider.stats.cashHeldTodayPaise, { whole: true })}
+                hint="Collected at the door; owed to Foodos"
+                tone={rider.stats.cashHeldTodayPaise > 0 ? 'warning' : undefined}
+              />
+              <Stat label="Rating" value={rider.ratingCount ? rider.rating.toFixed(1) : '—'} hint={rider.ratingCount ? `${rider.ratingCount} ratings` : 'No ratings yet'} />
+            </div>
+
+            <div className="grid-2 align-start">
+              <div className="stack">
+                <Card title="Details">
+                  <Details
+                    rows={[
+                      ['Phone', <a key="p" href={`tel:${rider.phone}`}>{formatPhone(rider.phone)}</a>],
+                      ['City', rider.city || <Badge key="c" tone="warning">Not set</Badge>],
+                      ['Vehicle', VEHICLE[rider.vehicleType] || rider.vehicleType],
+                      ['Vehicle number', rider.vehicleNumber],
+                      ['Licence number', rider.licenseNumber],
+                      ['Last signed in', rider.lastSignedInAt ? timeAgo(rider.lastSignedInAt) : 'Never'],
+                    ]}
+                  />
+                </Card>
+
+                <RiderDocuments rider={rider} onChange={state.setData} />
+              </div>
+
+              <Card title="Last known location">
+                {rider.location ? (
+                  <>
+                    <MapPicker value={rider.location} readOnly height={240} />
+                    <p className="muted small">
+                      Updated {timeAgo(rider.location.updatedAt)}. Shared only while the Delivery app is open and the rider is online
+                      or on a delivery.
+                    </p>
+                  </>
                 ) : (
-                  <Details rows={rider.documents.map((doc) => [titleCase(doc.type), titleCase(doc.status)])} />
+                  <p className="muted">Not shared yet.</p>
                 )}
               </Card>
+
+              <TestAccountCard
+                userId={rider.id}
+                phone={rider.phone}
+                isTest={rider.isTest}
+                onChange={(isTest) => state.setData({ ...rider, isTest })}
+              />
             </div>
 
-            <Card title="Last known location">
-              {rider.location ? (
-                <>
-                  <MapPicker value={rider.location} readOnly height={240} />
-                  <p className="muted small">
-                    Updated {timeAgo(rider.location.updatedAt)}. Shared only while the Delivery app is open and the rider is online
-                    or on a delivery.
-                  </p>
-                </>
+            <Card title="Recent deliveries" flush>
+              {rider.recentDeliveries.length === 0 ? (
+                <p className="muted pad">No deliveries yet.</p>
               ) : (
-                <p className="muted">Not shared yet.</p>
+                <div className="table-wrap">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Order</th>
+                        <th>Restaurant</th>
+                        <th>Status</th>
+                        <th>Payment</th>
+                        <th className="num">Distance</th>
+                        <th className="num">Rider pay</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rider.recentDeliveries.map((delivery) => (
+                        <tr key={delivery.id}>
+                          <td>
+                            <Link className="mono" to={`/orders/${delivery.orderId}`}>
+                              {delivery.orderNumber}
+                            </Link>
+                            <div className="sub">{formatDateTime(delivery.deliveredAt || delivery.acceptedAt)}</div>
+                          </td>
+                          <td>{delivery.restaurant}</td>
+                          <td>{DELIVERY_STATUS[delivery.status] || delivery.status}</td>
+                          <td>
+                            {PAYMENT_METHOD[delivery.paymentMethod] || delivery.paymentMethod}
+                            {delivery.paymentMethod === 'cod' && <div className="sub">Collect {formatMoney(delivery.orderTotalPaise)}</div>}
+                          </td>
+                          <td className="num">{delivery.distanceKm !== null ? `${delivery.distanceKm} km` : '—'}</td>
+                          <td className="num">{formatMoney(delivery.earningPaise)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </Card>
 
-            <TestAccountCard
-              userId={rider.id}
-              phone={rider.phone}
-              isTest={rider.isTest}
-              onChange={(isTest) => state.setData({ ...rider, isTest })}
-            />
-          </div>
+            {editing && <EditRider rider={rider} onSaved={(saved) => { state.setData(saved); toast('Rider details saved') }} onClose={() => setEditing(false)} />}
 
-          <Card title="Recent deliveries" flush>
-            {rider.recentDeliveries.length === 0 ? (
-              <p className="muted pad">No deliveries yet.</p>
-            ) : (
-              <div className="table-wrap">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Order</th>
-                      <th>Restaurant</th>
-                      <th>Status</th>
-                      <th>Payment</th>
-                      <th className="num">Distance</th>
-                      <th className="num">Rider pay</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rider.recentDeliveries.map((delivery) => (
-                      <tr key={delivery.id}>
-                        <td>
-                          <Link className="mono" to={`/orders/${delivery.orderId}`}>
-                            {delivery.orderNumber}
-                          </Link>
-                          <div className="sub">{formatDateTime(delivery.deliveredAt || delivery.acceptedAt)}</div>
-                        </td>
-                        <td>{delivery.restaurant}</td>
-                        <td>{DELIVERY_STATUS[delivery.status] || delivery.status}</td>
-                        <td>
-                          {PAYMENT_METHOD[delivery.paymentMethod] || delivery.paymentMethod}
-                          {delivery.paymentMethod === 'cod' && <div className="sub">Collect {formatMoney(delivery.orderTotalPaise)}</div>}
-                        </td>
-                        <td className="num">{delivery.distanceKm !== null ? `${delivery.distanceKm} km` : '—'}</td>
-                        <td className="num">{formatMoney(delivery.earningPaise)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            {action && (
+              <ConfirmDialog
+                title={action.title}
+                body={
+                  <>
+                    <p>{action.body}</p>
+                    {action.status === 'active' && unchecked.length > 0 && (
+                      <p className="notice notice-warning">Not approved yet: {unchecked.join(', ')}.</p>
+                    )}
+                  </>
+                }
+                confirmLabel={action.label}
+                danger={action.danger}
+                reasonLabel={action.status === 'active' ? undefined : 'Reason'}
+                reasonHint="Kept in the activity log for the team. The rider is not shown it."
+                onConfirm={changeStatus}
+                onClose={() => setAction(null)}
+              />
             )}
-          </Card>
-
-          {editing && <EditRider rider={rider} onSaved={(saved) => { state.setData(saved); toast('Rider details saved') }} onClose={() => setEditing(false)} />}
-
-          {action && (
-            <ConfirmDialog
-              title={action.title}
-              body={<p>{action.body}</p>}
-              confirmLabel={action.label}
-              danger={action.danger}
-              reasonLabel={action.status === 'active' ? undefined : 'Reason'}
-              reasonHint="Kept in the activity log for the team. The rider is not shown it."
-              onConfirm={changeStatus}
-              onClose={() => setAction(null)}
-            />
-          )}
-        </>
-      )}
+          </>
+        )
+      }}
     </Loadable>
   )
 }

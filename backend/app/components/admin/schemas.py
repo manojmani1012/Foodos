@@ -194,6 +194,20 @@ class AssignRiderBody(BaseModel):
     riderId: str = Field(min_length=1, max_length=64)
 
 
+class ReviewDocumentBody(BaseModel):
+    status: Literal["verified", "rejected"]
+    reason: Optional[str] = Field(default=None, max_length=300)
+
+    @model_validator(mode="after")
+    def _reason_when_rejecting(self) -> "ReviewDocumentBody":
+        self.reason = _blank_to_none(self.reason)
+
+        if self.status == "rejected" and not self.reason:
+            raise ValueError("Say why, so the rider knows what to fix")
+
+        return self
+
+
 class TestAccountBody(BaseModel):
     isTest: bool
 

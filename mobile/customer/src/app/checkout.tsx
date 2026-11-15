@@ -48,6 +48,9 @@ const METHODS = [
   { id: 'wallet', label: 'Foodos wallet', hint: 'Coming soon', icon: 'briefcase', enabled: false },
 ] as const
 
+// Tip amounts in rupees, like Swiggy and Zomato offer.
+const TIPS = [10, 20, 30, 50]
+
 export default function CheckoutScreen() {
   const router = useRouter()
   const insets = useSafeAreaInsets()
@@ -57,6 +60,7 @@ export default function CheckoutScreen() {
 
   const [method, setMethod] = useState<'upi' | 'card' | 'cod'>('upi')
   const [quote, setQuote] = useState<Quote | null>(null)
+  const [tip, setTip] = useState(0)
   const [placing, setPlacing] = useState(false)
   const [error, setError] = useState('')
 
@@ -70,11 +74,11 @@ export default function CheckoutScreen() {
     if (cart.lines.length === 0) return
 
     try {
-      setQuote(await quoteCart(cart.lines, couponCode, location.selected?.id))
+      setQuote(await quoteCart(cart.lines, couponCode, location.selected?.id, tip * 100))
     } catch (priceError: any) {
       setError(priceError.message || 'Could not price your order')
     }
-  }, [cart.lines, couponCode, location.selected?.id])
+  }, [cart.lines, couponCode, location.selected?.id, tip])
 
   // The restaurant must deliver to the chosen address, which must be pinned.
   const unpinned = !!location.selected && !hasPin(location.selected)
@@ -117,6 +121,7 @@ export default function CheckoutScreen() {
         addressId: location.selected.id,
         idempotencyKey,
         paymentMethod: method,
+        tipPaise: tip * 100,
       })
 
       // The order lives on the server now, so the local basket is done.
@@ -218,6 +223,31 @@ export default function CheckoutScreen() {
           </View>
 
           <View style={styles.card}>
+            <Text style={styles.cardTitle}>Tip your delivery partner</Text>
+            <Text style={styles.tipHint}>All of the tip goes to your delivery partner.</Text>
+            <View style={styles.tips}>
+              {TIPS.map(amount => {
+                const selected = amount === tip
+
+                return (
+                  <Pressable
+                    key={amount}
+                    style={[styles.tipChip, selected && styles.tipChipSelected]}
+                    // Tapping the chosen tip again removes it.
+                    onPress={() => setTip(selected ? 0 : amount)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                  >
+                    <Text style={[styles.tipChipText, selected && styles.tipChipTextSelected]}>
+                      {formatMoney(amount)}
+                    </Text>
+                  </Pressable>
+                )
+              })}
+            </View>
+          </View>
+
+          <View style={styles.card}>
             <Text style={styles.cardTitle}>Order summary</Text>
 
             {cart.lines.map(line => (
@@ -241,6 +271,7 @@ export default function CheckoutScreen() {
             {quote && quote.discount > 0 && (
               <BillRow label="Coupon discount" value={-quote.discount} tone="good" />
             )}
+            {quote && quote.tip > 0 && <BillRow label="Delivery partner tip" value={quote.tip} />}
             {quote && quote.roundOff !== 0 && <BillRow label="Round off" value={quote.roundOff} />}
 
             <View style={styles.billTotal}>
@@ -342,6 +373,20 @@ const styles = StyleSheet.create({
   },
   methodLabel: { ...type.bodyStrong, color: colors.ink },
   methodHint: { ...type.caption, color: colors.muted, marginTop: 1 },
+
+  tipHint: { ...type.caption, color: colors.muted, marginTop: -space.sm, marginBottom: space.md },
+  tips: { flexDirection: 'row', gap: space.sm },
+  tipChip: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: space.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.lineStrong,
+  },
+  tipChipSelected: { borderColor: colors.brand, backgroundColor: colors.brand },
+  tipChipText: { ...type.smallStrong, color: colors.ink },
+  tipChipTextSelected: { color: colors.surface },
 
   summaryRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingVertical: space.xs },
   summaryQty: { ...type.smallStrong, color: colors.brand, minWidth: 26 },

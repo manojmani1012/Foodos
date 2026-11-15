@@ -18,7 +18,7 @@ from . import jobs
 from .config import get_settings
 from .database import connect_database, disconnect_database, ping_database
 from .errors import AppError
-from .routers import admin, auth, customer, delivery, media, notifications, restaurant, webhooks
+from .routers import admin, auth, customer, delivery, invoices, media, notifications, restaurant, webhooks
 
 logger = logging.getLogger("foodos")
 
@@ -153,6 +153,7 @@ app.include_router(delivery.router)
 app.include_router(admin.router)
 app.include_router(webhooks.router)
 app.include_router(media.router)
+app.include_router(invoices.router)
 app.include_router(notifications.router)
 
 

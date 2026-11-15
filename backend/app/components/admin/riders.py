@@ -12,6 +12,9 @@ from typing import Any, Optional
 
 from ...database import fetch, fetchrow, fetchval, transaction
 from ...errors import conflict, not_found
+from ..delivery.documents import REQUIRED as REQUIRED_DOCUMENTS
+from ..delivery.documents import as_view as documents_view
+from ..delivery.documents import check_type
 from . import audit
 
 STATUSES = ("pending", "active", "suspended", "rejected")
@@ -232,15 +235,16 @@ async def get_rider(rider_id: str) -> dict:
             "distanceKmLast7Days": round(stats["km_7"], 1),
             "cashHeldTodayPaise": int(cash_today),
         },
+        # Every required document, uploaded or not; the photo is fetched with
+        # the admin's sign-in, never from a public link.
         "documents": [
             {
-                "type": doc["doc_type"],
-                "url": doc["file_url"],
-                "status": doc["status"],
-                "rejectionReason": doc["rejection_reason"],
-                "uploadedAt": doc["created_at"].isoformat(),
+                **doc,
+                "fileUrl": f"/api/v1/admin/riders/{row['user_id']}/documents/{doc['type']}/file"
+                if doc["status"] != "missing"
+                else None,
             }
-            for doc in documents
+            for doc in documents_view(documents)
         ],
         "recentDeliveries": [
             {
@@ -344,6 +348,54 @@ async def set_status(
             "rider",
             identifier,
             {"name": current["full_name"], "from": current["status"], "to": status, "reason": reason},
+            ip,
+            connection,
+        )
+
+    return await get_rider(str(identifier))
+
+
+async def review_document(
+    rider_id: str, doc_type: str, status: str, reason: Optional[str], actor_id: uuid.UUID, ip: Optional[str]
+) -> dict:
+    """Approves a rider's document, or rejects it with a reason the rider sees."""
+    identifier = as_uuid(rider_id)
+    check_type(doc_type)
+
+    async with transaction() as connection:
+        row = await connection.fetchrow(
+            """
+            select u.full_name from delivery_partner_documents d join users u on u.id = d.partner_id
+            where d.partner_id = $1 and d.doc_type = $2
+            for update of d
+            """,
+            identifier,
+            doc_type,
+        )
+
+        if row is None:
+            raise not_found("document_not_found", "This rider has not uploaded that document yet")
+
+        await connection.execute(
+            """
+            update delivery_partner_documents
+            set status = $3, rejection_reason = $4, reviewed_by = $5, reviewed_at = now()
+            where partner_id = $1 and doc_type = $2
+            """,
+            identifier,
+            doc_type,
+            status,
+            reason if status == "rejected" else None,
+            actor_id,
+        )
+
+        await audit.record(
+            actor_id,
+            "Approved rider document" if status == "verified" else "Rejected rider document",
+            "Riders",
+            "rider",
+            identifier,
+            {"name": row["full_name"], "document": REQUIRED_DOCUMENTS[doc_type], "reason": reason},
             ip,
             connection,
         )

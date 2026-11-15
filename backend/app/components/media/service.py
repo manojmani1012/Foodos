@@ -47,20 +47,22 @@ def validate_image(data: bytes) -> str:
     return content_type
 
 
-async def store_image(owner_id: Any, data: bytes) -> str:
-    """Saves a validated image and returns the URL path the apps use to show it."""
+async def store_image(owner_id: Any, data: bytes, private: bool = False) -> str:
+    """Saves a validated image and returns the URL path the apps use to show it.
+    A private image (a rider's licence, say) is never served by that public path."""
     content_type = validate_image(data)
 
     row = await fetchrow(
         """
-        insert into media (owner_id, content_type, byte_size, data)
-        values ($1, $2, $3, $4)
+        insert into media (owner_id, content_type, byte_size, data, is_private)
+        values ($1, $2, $3, $4, $5)
         returning id
         """,
         owner_id,
         content_type,
         len(data),
         data,
+        private,
     )
 
     return f"{MEDIA_PREFIX}{row['id']}"
@@ -94,4 +96,4 @@ async def load_image(media_id: str) -> Optional[Any]:
     except ValueError:
         return None
 
-    return await fetchrow("select content_type, data from media where id = $1", identifier)
+    return await fetchrow("select content_type, data from media where id = $1 and not is_private", identifier)

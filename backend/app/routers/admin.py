@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import Response
 
 from ..components.admin import (
     assignment,
@@ -29,6 +30,7 @@ from ..components.admin.schemas import (
     CreateOfferBody,
     CreateRestaurantBody,
     RecordPayoutBody,
+    ReviewDocumentBody,
     RestaurantStatusBody,
     RiderStatusBody,
     TestAccountBody,
@@ -37,6 +39,9 @@ from ..components.admin.schemas import (
     UpdateRiderBody,
 )
 from ..components.auth.dependencies import CurrentUser, require_role
+from ..components.delivery import documents as rider_documents
+from ..components.orders import invoice
+from ..errors import not_found
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -144,6 +149,30 @@ async def set_rider_status(rider_id: str, body: RiderStatusBody, actor: Actor = 
     return {"ok": True, "rider": await riders.set_status(rider_id, body.status, body.reason, actor.id, actor.ip)}
 
 
+@router.get("/riders/{rider_id}/documents/{doc_type}/file")
+async def rider_document_file(rider_id: str, doc_type: str, user: CurrentUser = Depends(admin_only)):
+    image = await rider_documents.file_of(riders.as_uuid(rider_id), doc_type)
+
+    if image is None:
+        raise not_found("document_not_found", "This rider has not uploaded that document yet")
+
+    # Identity papers: never kept by the browser or anything in between.
+    return Response(
+        content=bytes(image["data"]),
+        media_type=image["content_type"],
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.post("/riders/{rider_id}/documents/{doc_type}/review")
+async def review_rider_document(
+    rider_id: str, doc_type: str, body: ReviewDocumentBody, actor: Actor = Depends(acting_admin)
+):
+    rider = await riders.review_document(rider_id, doc_type, body.status, body.reason, actor.id, actor.ip)
+
+    return {"ok": True, "rider": rider}
+
+
 # --- Orders ----------------------------------------------------------------
 
 
@@ -175,6 +204,11 @@ async def get_order(order_id: str, user: CurrentUser = Depends(admin_only)):
 @router.post("/orders/{order_id}/cancel")
 async def cancel_order(order_id: str, body: CancelOrderBody, actor: Actor = Depends(acting_admin)):
     return {"ok": True, "order": await orders.cancel(order_id, body.reason, actor.id, actor.ip)}
+
+
+@router.post("/orders/{order_id}/invoice")
+async def order_invoice(order_id: str, user: CurrentUser = Depends(admin_only)):
+    return {"ok": True, "url": await invoice.invoice_link(order_id)}
 
 
 @router.get("/orders/{order_id}/riders")

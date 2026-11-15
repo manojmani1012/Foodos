@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query
 
 from ..components.auth.dependencies import CurrentUser, optional_authenticate, require_role
 from ..components.orders import addresses as address_service
+from ..components.orders import invoice
 from ..components.orders import service as order_service
 from ..components.orders.pricing import quote_cart, quote_serviceability
 from ..components.orders import profile as profile_service
@@ -155,7 +156,7 @@ async def quote_cart_endpoint(
     Open to anyone so the cart totals before signing in; coupons that depend on
     who is ordering report why they cannot apply rather than failing the quote.
     """
-    quote = await quote_cart(body.items, body.couponCode, user.id if user else None)
+    quote = await quote_cart(body.items, body.couponCode, user.id if user else None, body.tipPaise)
     result = {"ok": True, **quote.to_dict()}
 
     # Whether the restaurant delivers to the chosen address, so the cart can
@@ -200,6 +201,12 @@ async def list_orders(
 @router.get("/orders/{order_id}")
 async def get_order(order_id: str, user: CurrentUser = Depends(customer_only)):
     return {"ok": True, "order": await order_service.get_order(user.id, order_id)}
+
+
+@router.post("/orders/{order_id}/invoice")
+async def order_invoice(order_id: str, user: CurrentUser = Depends(customer_only)):
+    """A link to the order's GST invoice, for the browser; valid 15 minutes."""
+    return {"ok": True, "url": await invoice.invoice_link(order_id, user.id)}
 
 
 @router.post("/orders/{order_id}/cancel")
