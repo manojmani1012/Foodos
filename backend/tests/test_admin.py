@@ -261,17 +261,48 @@ class TestRestaurantLifecycle:
         assert restaurant["name"] == "Chettinad Kitchen"
         assert restaurant["latitude"] == pytest.approx(13.0339)
 
-    async def test_can_take_a_restaurant_off_the_map(self, client, admin):
+    async def test_the_pin_can_be_moved_but_never_removed(self, client, admin):
+        """Riders navigate to the pin and it decides who the outlet delivers
+        to; testers' restaurants without one sent riders 18 km off course."""
         restaurant_id = await self.onboarded(client, admin)
 
-        response = await client.patch(
+        removed = await client.patch(
             f"/api/v1/admin/restaurants/{restaurant_id}",
             json={"latitude": None, "longitude": None},
             headers=admin,
         )
+        moved = await client.patch(
+            f"/api/v1/admin/restaurants/{restaurant_id}",
+            json={"latitude": 13.04, "longitude": 80.26},
+            headers=admin,
+        )
 
-        assert response.status_code == 200
-        assert response.json()["restaurant"]["checklist"]["hasLocation"] is False
+        assert removed.status_code == 400
+        assert removed.json()["code"] == "location_required"
+        assert moved.status_code == 200
+        assert moved.json()["restaurant"]["latitude"] == pytest.approx(13.04)
+
+    async def test_a_restaurant_cannot_be_onboarded_without_a_pin(self, client, admin):
+        body = {key: value for key, value in NEW_RESTAURANT.items() if key not in ("latitude", "longitude")}
+
+        response = await client.post("/api/v1/admin/restaurants", json=body, headers=admin)
+
+        assert response.status_code == 400
+        assert set(response.json()["details"]["fields"]) == {"latitude", "longitude"}
+
+    async def test_an_unpinned_restaurant_cannot_go_live(self, client, admin):
+        owner, restaurant_id = await owner_with_restaurant(client)
+        await execute(
+            "update restaurants set status = 'pending', latitude = null, longitude = null where id = $1", restaurant_id
+        )
+        await make_item(restaurant_id)
+
+        response = await client.post(
+            f"/api/v1/admin/restaurants/{restaurant_id}/status", json={"status": "active"}, headers=admin
+        )
+
+        assert response.status_code == 409
+        assert response.json()["code"] == "location_required"
 
     async def test_lists_with_counts_and_finds_by_owner_phone(self, client, admin):
         await self.onboarded(client, admin)

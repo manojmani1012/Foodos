@@ -10,10 +10,10 @@ from fastapi import APIRouter, Depends, Query
 from ..components.auth.dependencies import CurrentUser, require_role
 from ..components.delivery import service
 from ..components.delivery.schemas import (
-    DeliveredBody,
     LocationBody,
     OnlineBody,
     PartnerProfileBody,
+    StepBody,
 )
 
 router = APIRouter(prefix="/api/v1/delivery", tags=["delivery"])
@@ -67,32 +67,44 @@ async def reject(delivery_id: str, user: CurrentUser = Depends(rider_only)):
     return {"ok": True}
 
 
-@router.post("/deliveries/{delivery_id}/reached")
-async def reached(delivery_id: str, user: CurrentUser = Depends(rider_only)):
-    return {"ok": True, **await service.advance(user.id, delivery_id, "reached")}
-
-
-@router.post("/deliveries/{delivery_id}/picked-up")
-async def picked_up(delivery_id: str, user: CurrentUser = Depends(rider_only)):
-    return {"ok": True, **await service.advance(user.id, delivery_id, "picked-up")}
-
-
-@router.post("/deliveries/{delivery_id}/arrived")
-async def arrived(delivery_id: str, user: CurrentUser = Depends(rider_only)):
-    return {"ok": True, **await service.advance(user.id, delivery_id, "arrived")}
-
-
-@router.post("/deliveries/{delivery_id}/delivered")
-async def delivered(
-    delivery_id: str, body: Optional[DeliveredBody] = None, user: CurrentUser = Depends(rider_only)
-):
-    # A prepaid order has nothing to confirm, so the body is optional.
-    cash_collected = body.cashCollected if body else False
+# The four steps of a delivery. Each may carry the phone's position; "delivered"
+# also carries the cash confirmation and the customer's code.
+async def _step(delivery_id: str, action: str, body: Optional[StepBody], user: CurrentUser) -> dict:
+    body = body or StepBody()
 
     return {
         "ok": True,
-        **await service.advance(user.id, delivery_id, "delivered", cash_collected=cash_collected),
+        **await service.advance(
+            user.id,
+            delivery_id,
+            action,
+            cash_collected=body.cashCollected,
+            latitude=body.latitude,
+            longitude=body.longitude,
+            accuracy=body.accuracy,
+            code=body.code,
+        ),
     }
+
+
+@router.post("/deliveries/{delivery_id}/reached")
+async def reached(delivery_id: str, body: Optional[StepBody] = None, user: CurrentUser = Depends(rider_only)):
+    return await _step(delivery_id, "reached", body, user)
+
+
+@router.post("/deliveries/{delivery_id}/picked-up")
+async def picked_up(delivery_id: str, body: Optional[StepBody] = None, user: CurrentUser = Depends(rider_only)):
+    return await _step(delivery_id, "picked-up", body, user)
+
+
+@router.post("/deliveries/{delivery_id}/arrived")
+async def arrived(delivery_id: str, body: Optional[StepBody] = None, user: CurrentUser = Depends(rider_only)):
+    return await _step(delivery_id, "arrived", body, user)
+
+
+@router.post("/deliveries/{delivery_id}/delivered")
+async def delivered(delivery_id: str, body: Optional[StepBody] = None, user: CurrentUser = Depends(rider_only)):
+    return await _step(delivery_id, "delivered", body, user)
 
 
 @router.get("/earnings")

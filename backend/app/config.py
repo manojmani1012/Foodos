@@ -102,6 +102,37 @@ class Settings(BaseSettings):
     rider_base_pay_paise: int = Field(default=2500, ge=0)
     rider_pay_per_km_paise: int = Field(default=600, ge=0)
 
+    # Customers see, and can order from, restaurants within this distance of
+    # their pin. A restaurant can have its own radius, set in the admin panel.
+    delivery_radius_km: float = Field(default=7.0, gt=0, le=30)
+
+    # An order the restaurant has not accepted in this time is cancelled, and
+    # refunded if paid. An online order left unpaid is dropped after the second.
+    restaurant_accept_minutes: int = Field(default=5, ge=1)
+    unpaid_order_minutes: int = Field(default=30, ge=5)
+
+    # Dispatch offers each delivery to the nearest free rider, one at a time,
+    # for offer_seconds. The search widens through these radii, one step every
+    # ring_minutes. Riders whose last position is older than the freshness
+    # limit are not offered anything: they may have closed the app.
+    dispatch_offer_seconds: int = Field(default=30, ge=10)
+    dispatch_radii_km: str = "3,5,8"
+    dispatch_ring_minutes: float = Field(default=2, gt=0)
+    rider_location_fresh_seconds: int = Field(default=180, ge=30)
+
+    # Riders can mark "reached the restaurant" and "arrived at the customer"
+    # only within this distance of the pin.
+    geofence_metres: int = Field(default=100, ge=20)
+
+    # Which orders need the customer's 4-digit code before the rider can mark
+    # them delivered.
+    delivery_code_required: Literal["all", "prepaid", "off"] = "all"
+
+    # The background loop that expires offers, dispatches riders and cancels
+    # unanswered orders. Off in tests, which call each step directly.
+    background_jobs_enabled: bool = True
+    background_interval_seconds: int = Field(default=10, ge=2)
+
     database_pool_min: int = Field(default=1, ge=1)
     database_pool_max: int = Field(default=10, ge=1)
 
@@ -122,6 +153,10 @@ class Settings(BaseSettings):
     @property
     def is_test(self) -> bool:
         return self.node_env == "test"
+
+    @property
+    def dispatch_radii(self) -> list[float]:
+        return [float(part) for part in self.dispatch_radii_km.split(",") if part.strip()] or [5.0]
 
     @property
     def cors_origin_list(self) -> list[str]:

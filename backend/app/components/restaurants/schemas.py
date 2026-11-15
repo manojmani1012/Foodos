@@ -52,6 +52,10 @@ class RestaurantSummary(BaseModel):
     deliveryFeePaise: int
     isAcceptingOrders: bool
     isFavourite: bool = False
+    # Set when the customer's pin was sent: how far away the restaurant is, and
+    # whether it delivers there. A favourite can be out of range.
+    distanceKm: Optional[float] = None
+    deliversHere: Optional[bool] = None
 
 
 class RestaurantDetail(RestaurantSummary):

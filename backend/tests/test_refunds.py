@@ -25,7 +25,7 @@ from test_payments import (  # noqa: F401
     sign_webhook,
 )
 
-ADDRESS = {"label": "Home", "line1": "12, Lake View Road", "city": "Chennai"}
+ADDRESS = {"label": "Home", "line1": "12, Lake View Road", "city": "Chennai", "latitude": 13.0827, "longitude": 80.227}
 
 
 @pytest.fixture

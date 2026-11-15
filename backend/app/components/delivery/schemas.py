@@ -21,6 +21,16 @@ class PartnerProfileBody(BaseModel):
     city: Optional[str] = Field(default=None, max_length=60)
 
 
-class DeliveredBody(BaseModel):
-    # Cash orders only: the rider confirms the money was taken at the door.
+class StepBody(BaseModel):
+    """Sent with each delivery step. All optional, so an older app that sends
+    nothing still gets a clear answer rather than a validation error."""
+
+    # Where the phone is right now: "reached" and "arrived" are only accepted
+    # near the pin. Accuracy is the phone's own estimate, in metres.
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+    accuracy: Optional[float] = Field(default=None, ge=0, le=5000)
+    # "Delivered" only: cash orders confirm the money was taken at the door,
+    # and the customer's 4-digit code proves the food reached them.
     cashCollected: bool = False
+    code: Optional[str] = Field(default=None, max_length=8)

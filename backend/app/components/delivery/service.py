@@ -9,39 +9,52 @@ The life of a delivery:
     rider at the customer         ->  arrived      (order: on_the_way)
     handed over                   ->  delivered    (order: delivered)
 
-Dispatch is first come, first served: every online rider in the city sees an
-open delivery, and the first to accept gets it. The delivery row is locked for
-that decision, so two riders tapping Accept together cannot both win.
+Dispatch (see dispatch.py) offers each open delivery to one rider at a time,
+nearest first, for a few seconds each. Only the rider holding the offer can
+accept it, and the delivery row is locked for that decision.
+
+"Reached the restaurant" and "arrived at the customer" are only accepted
+within `geofence_metres` of the pin, and the steps cannot be skipped. The order
+is only delivered when the rider enters the customer's 4-digit code.
 
 A rider who signs up starts as `pending` and cannot take orders until an admin
 approves them. Only `active` riders can go online.
 """
 
-import json
-import math
 import uuid
 from typing import Any, Optional
 
 from ...config import get_settings
 from ...database import fetch, fetchrow, fetchval, transaction
-from ...errors import bad_request, conflict, forbidden, not_found
+from ...errors import AppError, bad_request, conflict, forbidden, not_found
+from ..geo import distance_km
 from ..notifications import events
-
-# Statuses where the rider still has the order in hand.
-ACTIVE = ("accepted", "reached_restaurant", "picked_up", "arrived")
+from ..orders.delivery_code import LOCK_SECONDS, MAX_ATTEMPTS, code_required
+from . import dispatch
+from .dispatch import ACTIVE, as_address as _address, rider_pay, trip
 
 # Each rider action: which delivery statuses it may follow, the status it sets,
 # the timestamp it stamps, and what the customer's order becomes (if anything).
 #
-# The "reached restaurant" tap is informational, so picking up straight from
-# accepted is allowed; likewise "arrived" may be skipped. A rider who forgets a
-# tap should not be stuck unable to finish the delivery.
+# No step can be skipped. "Reached" and "arrived" are checked against the map
+# (a rider once marked "reached the restaurant" from 18 km away), so picking up
+# without reaching, or delivering without arriving, would undo that check.
 ACTIONS = {
     "reached": ({"accepted"}, "reached_restaurant", "reached_restaurant_at", None),
-    "picked-up": ({"accepted", "reached_restaurant"}, "picked_up", "picked_up_at", "picked_up"),
+    "picked-up": ({"reached_restaurant"}, "picked_up", "picked_up_at", "picked_up"),
     "arrived": ({"picked_up"}, "arrived", "arrived_at", "on_the_way"),
-    "delivered": ({"picked_up", "arrived"}, "delivered", "delivered_at", "delivered"),
+    "delivered": ({"arrived"}, "delivered", "delivered_at", "delivered"),
 }
+
+# The two steps that must happen at a place, and which place.
+AT_PLACE = {"reached": "pickup location", "arrived": "customer's location"}
+
+# A position older than this is not proof of where the rider is now.
+STEP_LOCATION_FRESH_SECONDS = 120
+
+# Phone GPS can be off by tens of metres indoors. Up to this much of the
+# reported accuracy is given the rider the benefit of the doubt.
+MAX_ACCURACY_SLACK_METRES = 50
 
 # Who hears about each rider step: the restaurant when the rider is at the
 # counter, the customer for everything after.
@@ -69,32 +82,8 @@ def _as_uuid(value: str) -> uuid.UUID:
         raise not_found("delivery_not_found", "That delivery could not be found")
 
 
-def distance_km(a_lat: Any, a_lng: Any, b_lat: Any, b_lng: Any) -> Optional[float]:
-    """Straight-line distance between two points, or None if either is unknown.
-
-    Roads are longer than a straight line, so this slightly underestimates;
-    road distance needs a routing service and is a later change.
-    """
-    if None in (a_lat, a_lng, b_lat, b_lng):
-        return None
-
-    lat1, lng1, lat2, lng2 = map(math.radians, map(float, (a_lat, a_lng, b_lat, b_lng)))
-    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lng2 - lng1) / 2) ** 2
-
-    return round(2 * 6371 * math.asin(math.sqrt(h)), 2)
-
-
-def rider_pay(total_km: Optional[float]) -> int:
-    settings = get_settings()
-
-    return settings.rider_base_pay_paise + round((total_km or 0) * settings.rider_pay_per_km_paise)
-
-
-def _address(order_address: Any) -> dict:
-    if isinstance(order_address, str):
-        return json.loads(order_address)
-
-    return dict(order_address or {})
+def _format_distance(km: float) -> str:
+    return f"{round(km * 1000)} m" if km < 1 else f"{km:.1f} km"
 
 
 def _first_name(full_name: Optional[str]) -> str:
@@ -105,7 +94,8 @@ def _first_name(full_name: Optional[str]) -> str:
 
 
 async def open_delivery(order_id: uuid.UUID) -> None:
-    """Called once the restaurant accepts an order. Safe to call twice."""
+    """Called once the restaurant accepts an order, and offers it to the
+    nearest free rider straight away. Safe to call twice."""
     await fetchval(
         """
         insert into deliveries (order_id) values ($1)
@@ -114,6 +104,10 @@ async def open_delivery(order_id: uuid.UUID) -> None:
         """,
         order_id,
     )
+
+    delivery_id = await fetchval("select id from deliveries where order_id = $1", order_id)
+
+    await dispatch.offer_next(delivery_id)
 
 
 # --- The rider -------------------------------------------------------------
@@ -228,10 +222,11 @@ async def update_location(user_id: uuid.UUID, latitude: float, longitude: float)
 
 
 async def open_requests(user_id: uuid.UUID) -> list[dict]:
-    """The deliveries this rider could take right now.
+    """The delivery offered to this rider right now, if any.
 
     Empty unless the rider is approved, online and not already carrying an
-    order: one delivery at a time.
+    order. Dispatch puts an offer on one rider's screen at a time; this lists
+    it with the seconds left to accept.
     """
     partner = await _partner(user_id)
 
@@ -249,39 +244,36 @@ async def open_requests(user_id: uuid.UUID) -> list[dict]:
 
     rows = await fetch(
         """
-        select d.id, d.created_at, o.order_number, o.status as order_status, o.payment_method,
+        select d.id, d.created_at, q.expires_at,
+               greatest(0, extract(epoch from q.expires_at - now()))::int as seconds_left,
+               o.order_number, o.status as order_status, o.payment_method,
                o.payment_status, o.total_paise, o.tip_paise, o.delivery_address,
                r.name as restaurant_name, r.address_line as restaurant_area, r.city as restaurant_city,
                r.latitude as restaurant_lat, r.longitude as restaurant_lng,
                (select coalesce(sum(i.quantity), 0)::int from order_items i where i.order_id = o.id) as item_count
-        from deliveries d
+        from delivery_requests q
+        join deliveries d on d.id = q.delivery_id
         join orders o on o.id = d.order_id
         join restaurants r on r.id = o.restaurant_id
-        where d.status = 'searching'
+        where q.partner_id = $1 and q.status = 'sent' and q.expires_at > now()
+          and d.status = 'searching'
           and o.status in ('preparing', 'ready')
-          and ($2::text is null or lower(r.city) = lower($2))
-          and not exists (
-            select 1 from delivery_requests q
-            where q.delivery_id = d.id and q.partner_id = $1 and q.status = 'rejected'
-          )
-        order by d.created_at
-        limit 10
+        order by q.sent_at
         """,
         user_id,
-        partner["city"],
     )
 
     offers = []
 
     for row in rows:
         address = _address(row["delivery_address"])
-        pickup = distance_km(
-            partner["current_latitude"], partner["current_longitude"], row["restaurant_lat"], row["restaurant_lng"]
+        pickup, drop, total = trip(
+            partner["current_latitude"],
+            partner["current_longitude"],
+            row["restaurant_lat"],
+            row["restaurant_lng"],
+            address,
         )
-        drop = distance_km(
-            row["restaurant_lat"], row["restaurant_lng"], address.get("latitude"), address.get("longitude")
-        )
-        total = None if pickup is None and drop is None else round((pickup or 0) + (drop or 0), 2)
 
         offers.append(
             {
@@ -299,6 +291,9 @@ async def open_requests(user_id: uuid.UUID) -> list[dict]:
                 if row["payment_method"] == "cod" and row["payment_status"] != "paid"
                 else 0,
                 "openedAt": row["created_at"].isoformat(),
+                # The offer moves to the next rider when this runs out.
+                "expiresAt": row["expires_at"].isoformat(),
+                "secondsLeft": row["seconds_left"],
             }
         )
 
@@ -353,15 +348,30 @@ async def accept(user_id: uuid.UUID, delivery_id: str) -> dict:
         if delivery["status"] != "searching":
             raise conflict("delivery_taken", "Another delivery partner has already taken this order")
 
-        address = _address(delivery["delivery_address"])
-        pickup = distance_km(
-            partner["current_latitude"], partner["current_longitude"],
-            delivery["restaurant_lat"], delivery["restaurant_lng"],
+        # Only the rider this order is offered to can take it. A few seconds
+        # of grace cover a tap made just as the countdown reached zero.
+        offer = await connection.fetchrow(
+            """
+            select status, expires_at > now() - interval '5 seconds' as live
+            from delivery_requests where delivery_id = $1 and partner_id = $2
+            """,
+            identifier,
+            user_id,
         )
-        drop = distance_km(
-            delivery["restaurant_lat"], delivery["restaurant_lng"], address.get("latitude"), address.get("longitude")
+
+        if offer is None or offer["status"] != "sent" or not offer["live"]:
+            raise conflict(
+                "offer_expired",
+                "This request has expired. Stay online: the next order near you comes straight to your screen",
+            )
+
+        pickup, drop, total = trip(
+            partner["current_latitude"],
+            partner["current_longitude"],
+            delivery["restaurant_lat"],
+            delivery["restaurant_lng"],
+            _address(delivery["delivery_address"]),
         )
-        total = None if pickup is None and drop is None else round((pickup or 0) + (drop or 0), 2)
 
         await connection.execute(
             """
@@ -399,7 +409,8 @@ async def accept(user_id: uuid.UUID, delivery_id: str) -> dict:
 
 
 async def reject(user_id: uuid.UUID, delivery_id: str) -> None:
-    """Hides an offer from this rider. Other riders still see it."""
+    """Skips an offer. It goes straight to the next nearest rider, and this
+    rider is not offered it again."""
     identifier = _as_uuid(delivery_id)
 
     exists = await fetchval("select 1 from deliveries where id = $1", identifier)
@@ -420,28 +431,155 @@ async def reject(user_id: uuid.UUID, delivery_id: str) -> None:
         user_id,
     )
 
+    await dispatch.offer_next(identifier)
+
 
 # --- Doing the delivery ----------------------------------------------------
 
 
-async def advance(user_id: uuid.UUID, delivery_id: str, action: str, cash_collected: bool = False) -> dict:
+async def _check_code(user_id: uuid.UUID, identifier: uuid.UUID, code: Optional[str]) -> None:
+    """The customer's code, before "delivered" is allowed.
+
+    Its own transaction, so a wrong guess is counted even though the step then
+    fails. Five wrong guesses lock it for two minutes.
+    """
+    problem: Optional[AppError] = None
+
+    async with transaction() as connection:
+        row = await connection.fetchrow(
+            """
+            select d.partner_id, d.code_attempts, d.code_locked_until > now() as locked,
+                   ceil(extract(epoch from d.code_locked_until - now()) / 60)::int as wait_minutes,
+                   o.delivery_code, o.payment_method
+            from deliveries d
+            join orders o on o.id = d.order_id
+            where d.id = $1
+            for update of d
+            """,
+            identifier,
+        )
+
+        if row is None or row["partner_id"] != user_id:
+            raise not_found("delivery_not_found", "That delivery could not be found")
+
+        if not row["delivery_code"] or not code_required(row["payment_method"]):
+            return
+
+        entered = (code or "").strip()
+
+        if row["locked"]:
+            problem = AppError(
+                429,
+                "code_locked",
+                f"Too many wrong codes. Try again in {row['wait_minutes']} min, or call Foodos support",
+            )
+        elif not entered:
+            problem = bad_request("code_required", "Ask the customer for their 4-digit delivery code")
+        elif entered != row["delivery_code"]:
+            attempts = row["code_attempts"] + 1
+            locked = attempts >= MAX_ATTEMPTS
+
+            await connection.execute(
+                """
+                update deliveries
+                set code_attempts = $2,
+                    code_locked_until = case when $3 then now() + make_interval(secs => $4) end
+                where id = $1
+                """,
+                identifier,
+                0 if locked else attempts,
+                locked,
+                LOCK_SECONDS,
+            )
+
+            problem = bad_request(
+                "code_wrong",
+                "That code is not right. Check it with the customer"
+                if not locked
+                else f"Too many wrong codes. Try again in {LOCK_SECONDS // 60} min, or call Foodos support",
+            )
+        elif row["code_attempts"]:
+            await connection.execute("update deliveries set code_attempts = 0 where id = $1", identifier)
+
+    if problem:
+        raise problem
+
+
+def _check_place(action: str, delivery: Any, here: Optional[tuple[float, float]], accuracy: Optional[float]) -> None:
+    """Refuses "reached" and "arrived" away from the pin, like Swiggy does."""
+    place = AT_PLACE.get(action)
+
+    if place is None:
+        return
+
+    if action == "reached":
+        target = (delivery["restaurant_lat"], delivery["restaurant_lng"])
+    else:
+        address = _address(delivery["delivery_address"])
+        target = (address.get("latitude"), address.get("longitude"))
+
+    # Orders from before pins were required have nothing to check against.
+    if None in target:
+        return
+
+    if here is None:
+        raise bad_request(
+            "location_needed", f"Turn on location so Foodos can confirm you are at the {place}"
+        )
+
+    km = distance_km(here[0], here[1], target[0], target[1])
+    slack = min(accuracy or 0, MAX_ACCURACY_SLACK_METRES) / 1000
+
+    if km - slack > get_settings().geofence_metres / 1000:
+        raise AppError(
+            409,
+            "too_far",
+            f"You seem to be far away from the {place}. You are {_format_distance(km)} away. "
+            "Move closer to update the status",
+            {"distanceMetres": round(km * 1000)},
+        )
+
+
+async def advance(
+    user_id: uuid.UUID,
+    delivery_id: str,
+    action: str,
+    cash_collected: bool = False,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
+    accuracy: Optional[float] = None,
+    code: Optional[str] = None,
+) -> dict:
     if action not in ACTIONS:
         raise not_found("action_not_found", "Unknown delivery step")
 
     allowed_from, to_status, stamp, order_status = ACTIONS[action]
     identifier = _as_uuid(delivery_id)
 
+    # The position the app sent with the step is the freshest there is: keep it.
+    if latitude is not None and longitude is not None:
+        await update_location(user_id, latitude, longitude)
+
+    if action == "delivered":
+        await _check_code(user_id, identifier, code)
+
     async with transaction() as connection:
         delivery = await connection.fetchrow(
             """
             select d.id, d.status, d.partner_id, d.order_id, o.status as order_status,
-                   o.payment_method, o.payment_status
+                   o.payment_method, o.payment_status, o.delivery_address,
+                   r.latitude as restaurant_lat, r.longitude as restaurant_lng,
+                   p.current_latitude, p.current_longitude,
+                   p.last_location_at > now() - make_interval(secs => $2) as position_fresh
             from deliveries d
             join orders o on o.id = d.order_id
+            join restaurants r on r.id = o.restaurant_id
+            left join delivery_partners p on p.user_id = d.partner_id
             where d.id = $1
             for update of d, o
             """,
             identifier,
+            STEP_LOCATION_FRESH_SECONDS,
         )
 
         # Another rider's delivery is reported as missing, not forbidden.
@@ -462,6 +600,15 @@ async def advance(user_id: uuid.UUID, delivery_id: str, action: str, cash_collec
                 "order_not_ready",
                 "The restaurant has not marked this order ready yet. Wait for them to hand it over",
             )
+
+        here = None
+
+        if latitude is not None and longitude is not None:
+            here = (latitude, longitude)
+        elif delivery["position_fresh"] and delivery["current_latitude"] is not None:
+            here = (float(delivery["current_latitude"]), float(delivery["current_longitude"]))
+
+        _check_place(action, delivery, here, accuracy)
 
         cash_order = delivery["payment_method"] == "cod" and delivery["payment_status"] != "paid"
 
@@ -529,6 +676,7 @@ async def _delivery_detail(identifier: uuid.UUID) -> dict:
                d.accepted_at, d.picked_up_at, d.delivered_at,
                o.id as order_id, o.order_number, o.status as order_status, o.payment_method,
                o.payment_status, o.total_paise, o.delivery_address, o.special_instructions,
+               o.delivery_code is not null as has_code,
                r.name as restaurant_name, r.address_line as restaurant_address, r.city as restaurant_city,
                r.phone as restaurant_phone, r.latitude as restaurant_lat, r.longitude as restaurant_lng,
                u.full_name as customer_name, u.phone as customer_phone
@@ -567,6 +715,7 @@ async def _delivery_detail(identifier: uuid.UUID) -> dict:
             "address": ", ".join(
                 filter(None, [address.get("line1"), address.get("line2"), address.get("city"), address.get("pincode")])
             ),
+            "landmark": address.get("landmark"),
             "latitude": address.get("latitude"),
             "longitude": address.get("longitude"),
             "instructions": row["special_instructions"],
@@ -575,6 +724,12 @@ async def _delivery_detail(identifier: uuid.UUID) -> dict:
         "paymentMethod": row["payment_method"],
         "collectPaise": row["total_paise"] if cash_due else 0,
         "distanceKm": float(row["total_distance_km"]) if row["total_distance_km"] is not None else None,
+        "pickupKm": float(row["pickup_distance_km"]) if row["pickup_distance_km"] is not None else None,
+        "dropKm": float(row["drop_distance_km"]) if row["drop_distance_km"] is not None else None,
+        # "Delivered" needs the customer's code; the app shows a code box.
+        "codeRequired": row["has_code"] and code_required(row["payment_method"]),
+        # How close the rider must be for "reached" and "arrived".
+        "geofenceMetres": get_settings().geofence_metres,
         "earningPaise": row["base_earning_paise"] + row["incentive_paise"] + row["tip_paise"],
         "tipPaise": row["tip_paise"],
         "acceptedAt": row["accepted_at"].isoformat() if row["accepted_at"] else None,

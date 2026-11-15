@@ -4,15 +4,17 @@ Error responses keep the same shape the apps already expect:
     {"ok": false, "code": "...", "message": "...", "details": {...}}
 """
 
+import asyncio
 import logging
 import re
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from . import jobs
 from .config import get_settings
 from .database import connect_database, disconnect_database, ping_database
 from .errors import AppError
@@ -29,7 +31,22 @@ LAN_ORIGIN = re.compile(r"^http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_database()
+
+    # Offers, timeouts and auto-cancels (see jobs.py). Tests drive each step
+    # directly instead.
+    background = None
+
+    if settings.background_jobs_enabled and not settings.is_test:
+        background = asyncio.create_task(jobs.run_forever())
+
     yield
+
+    if background:
+        background.cancel()
+
+        with suppress(asyncio.CancelledError):
+            await background
+
     await disconnect_database()
 
 

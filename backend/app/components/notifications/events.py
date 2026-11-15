@@ -13,7 +13,9 @@ import logging
 import uuid
 from typing import Any, Optional
 
-from ...database import fetch, fetchrow
+from ...config import get_settings
+from ...database import fetchrow
+from ..orders.delivery_code import code_required
 from ..payments import refunds
 from . import push
 
@@ -46,7 +48,7 @@ async def _order(order_id: uuid.UUID) -> Optional[Any]:
     return await fetchrow(
         """
         select o.id, o.order_number, o.customer_id, o.status, o.total_paise, o.payment_method,
-               o.payment_status, o.cancellation_reason,
+               o.payment_status, o.cancellation_reason, o.delivery_code,
                r.id as restaurant_id, r.name as restaurant_name, r.owner_id, r.address_line, r.city,
                d.status as delivery_status, d.partner_id, u.full_name as rider_name,
                (select coalesce(sum(i.quantity), 0)::int from order_items i where i.order_id = o.id) as items
@@ -109,34 +111,58 @@ async def rider_at_restaurant(order_id: uuid.UUID) -> None:
 
 
 @_quietly
-async def delivery_available(order_id: uuid.UUID) -> None:
-    """Every rider who would see this order in their app right now: active,
-    online, not carrying an order, and in the restaurant's city (or with no
-    city set, the same rule the offer list uses)."""
+async def delivery_offered(order_id: uuid.UUID, rider_id: uuid.UUID) -> None:
+    """The one rider this delivery is being offered to right now. Dispatch
+    picks them; nobody else is told, so two riders never race for one order."""
     order = await _order(order_id)
 
     if order is None:
         return
 
-    riders = await fetch(
-        """
-        select p.user_id
-        from delivery_partners p
-        where p.status = 'active' and p.is_online
-          and (p.city is null or lower(p.city) = lower($1))
-          and not exists (
-            select 1 from deliveries d where d.partner_id = p.user_id and d.status = any($2::text[])
-          )
-        """,
-        order["city"],
-        list(ACTIVE_DELIVERY),
-    )
+    seconds = get_settings().dispatch_offer_seconds
 
     await push.notify(
-        [row["user_id"] for row in riders],
+        [rider_id],
         "delivery",
         "New delivery request",
-        f"Pickup from {order['restaurant_name']}, {order['address_line']}. Open the app to see your pay and accept.",
+        f"Pickup from {order['restaurant_name']}, {order['address_line']}. "
+        f"Open the app within {seconds} seconds to see your pay and accept.",
+        {"type": "offer"},
+        urgent=True,
+    )
+
+
+@_quietly
+async def delivery_assigned(order_id: uuid.UUID, rider_id: uuid.UUID) -> None:
+    """Foodos gave this rider the order directly, from the admin panel."""
+    order = await _order(order_id)
+
+    if order is None:
+        return
+
+    await push.notify(
+        [rider_id],
+        "delivery",
+        f"Foodos assigned you #{order['order_number']}",
+        f"Pick up from {order['restaurant_name']}, {order['address_line']}. Open the app to start.",
+        {"type": "delivery"},
+        urgent=True,
+    )
+
+
+@_quietly
+async def delivery_taken_away(order_id: uuid.UUID, rider_id: uuid.UUID) -> None:
+    """Foodos moved this order to another rider."""
+    order = await _order(order_id)
+
+    if order is None:
+        return
+
+    await push.notify(
+        [rider_id],
+        "delivery",
+        "Delivery reassigned",
+        f"#{order['order_number']} has been given to another rider. You are free to take the next order.",
         {"type": "offer"},
         urgent=True,
     )
@@ -220,6 +246,9 @@ async def rider_arrived(order_id: uuid.UUID) -> None:
     cash = order["payment_method"] == "cod" and order["payment_status"] != "paid"
     body = f"{_first_name(order['rider_name'])} has arrived with your order."
 
+    if order["delivery_code"] and code_required(order["payment_method"]):
+        body += f" Share code {order['delivery_code']} with them."
+
     if cash:
         body += f" Please keep {_rupees(order['total_paise'])} ready."
 
@@ -299,11 +328,16 @@ async def cancelled(
     if by != "restaurant" and restaurant_saw_it:
         who = "the customer" if by == "customer" else "Foodos"
 
+        if by == "system":
+            body = "It was not accepted in time, so it was cancelled and the customer was told."
+        else:
+            body = f"Cancelled by {who}{f': {reason}' if reason else '.'}"
+
         await push.notify(
             [order["owner_id"]],
             "restaurant",
             f"Order #{order['order_number']} cancelled",
-            f"Cancelled by {who}{f': {reason}' if reason else '.'}",
+            body,
             _order_link(order),
             urgent=True,
         )

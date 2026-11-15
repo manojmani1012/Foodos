@@ -208,6 +208,7 @@ async def get_order(restaurant_id: Any, order_id: str) -> dict:
         """
         select o.id, o.order_number, o.status, o.restaurant_id, o.subtotal_paise,
                o.delivery_fee_paise, o.packaging_fee_paise, o.tax_paise, o.discount_paise,
+               o.tip_paise, o.round_off_paise,
                o.total_paise, o.payment_method, o.payment_status, o.placed_at,
                o.special_instructions, o.delivery_address, o.cancellation_reason,
                u.full_name as customer_name, u.phone as customer_phone
@@ -269,8 +270,13 @@ async def get_order(restaurant_id: Any, order_id: str) -> dict:
         ],
         "subtotalPaise": order["subtotal_paise"],
         "packagingFeePaise": order["packaging_fee_paise"],
+        # The whole bill, so the lines on the restaurant's screen add up to the
+        # total the rider collects.
+        "deliveryFeePaise": order["delivery_fee_paise"],
         "taxPaise": order["tax_paise"],
         "discountPaise": order["discount_paise"],
+        "tipPaise": order["tip_paise"],
+        "roundOffPaise": order["round_off_paise"],
         "totalPaise": order["total_paise"],
         "paymentMethod": order["payment_method"],
         "paymentStatus": order["payment_status"],
@@ -363,11 +369,11 @@ async def accept_order(restaurant_id: Any, order_id: str, user_id: uuid.UUID) ->
     )
 
     # Riders are sought as soon as cooking starts, not when the food is ready,
-    # so one is usually waiting by the time it is.
+    # so one is usually waiting by the time it is. Opening the delivery offers
+    # it to the nearest free rider.
     await delivery.open_delivery(uuid.UUID(order_id))
 
     await events.order_accepted(uuid.UUID(order_id))
-    await events.delivery_available(uuid.UUID(order_id))
 
     return await get_order(restaurant_id, order_id)
 

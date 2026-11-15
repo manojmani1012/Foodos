@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Query
 from ..components.auth.dependencies import CurrentUser, optional_authenticate, require_role
 from ..components.orders import addresses as address_service
 from ..components.orders import service as order_service
-from ..components.orders.pricing import quote_cart
+from ..components.orders.pricing import quote_cart, quote_serviceability
 from ..components.orders import profile as profile_service
 from ..components.payments import service as payment_service
 from ..components.orders.schemas import (
@@ -31,6 +31,11 @@ router = APIRouter(prefix="/api/v1/customer", tags=["customer"])
 
 customer_only = require_role("customer")
 
+# The customer's delivery pin, sent with browsing calls so the lists show only
+# restaurants that deliver there.
+Latitude = Query(default=None, ge=-90, le=90, description="The customer's delivery pin")
+Longitude = Query(default=None, ge=-180, le=180, description="The customer's delivery pin")
+
 
 @router.get("/restaurants", response_model=RestaurantList)
 async def list_restaurants(
@@ -40,6 +45,8 @@ async def list_restaurants(
     vegOnly: bool = Query(default=False, description="Only pure-veg restaurants"),
     limit: int = Query(default=20, ge=1, le=50),
     offset: int = Query(default=0, ge=0),
+    latitude: Optional[float] = Latitude,
+    longitude: Optional[float] = Longitude,
     user: Optional[CurrentUser] = Depends(optional_authenticate),
 ):
     result = await service.list_restaurants(
@@ -50,14 +57,20 @@ async def list_restaurants(
         limit=limit,
         offset=offset,
         user_id=user.id if user else None,
+        latitude=latitude,
+        longitude=longitude,
     )
 
     return RestaurantList(**result)
 
 
 @router.get("/cuisines")
-async def list_cuisines(city: Optional[str] = Query(default=None)):
-    return {"ok": True, "cuisines": await service.list_cuisines(city)}
+async def list_cuisines(
+    city: Optional[str] = Query(default=None),
+    latitude: Optional[float] = Latitude,
+    longitude: Optional[float] = Longitude,
+):
+    return {"ok": True, "cuisines": await service.list_cuisines(city, latitude, longitude)}
 
 
 @router.get("/offers", response_model=None)
@@ -68,8 +81,12 @@ async def list_offers(restaurantId: Optional[str] = Query(default=None)) -> dict
 
 
 @router.get("/favourites")
-async def list_favourites(user: CurrentUser = Depends(customer_only)):
-    favourites: list[RestaurantSummary] = await service.list_favourites(user.id)
+async def list_favourites(
+    latitude: Optional[float] = Latitude,
+    longitude: Optional[float] = Longitude,
+    user: CurrentUser = Depends(customer_only),
+):
+    favourites: list[RestaurantSummary] = await service.list_favourites(user.id, latitude, longitude)
 
     return {"ok": True, "restaurants": favourites}
 
@@ -93,9 +110,11 @@ async def remove_favourite(restaurant_id: str, user: CurrentUser = Depends(custo
 @router.get("/restaurants/{restaurant_id}", response_model=RestaurantDetail)
 async def get_restaurant(
     restaurant_id: str,
+    latitude: Optional[float] = Latitude,
+    longitude: Optional[float] = Longitude,
     user: Optional[CurrentUser] = Depends(optional_authenticate),
 ):
-    return await service.get_restaurant(restaurant_id, user.id if user else None)
+    return await service.get_restaurant(restaurant_id, user.id if user else None, latitude, longitude)
 
 
 # --- Addresses -------------------------------------------------------------
@@ -109,6 +128,11 @@ async def list_addresses(user: CurrentUser = Depends(customer_only)):
 @router.post("/addresses", status_code=201)
 async def add_address(body: AddressBody, user: CurrentUser = Depends(customer_only)):
     return {"ok": True, "address": await address_service.add_address(user.id, body)}
+
+
+@router.put("/addresses/{address_id}")
+async def update_address(address_id: str, body: AddressBody, user: CurrentUser = Depends(customer_only)):
+    return {"ok": True, "address": await address_service.update_address(user.id, address_id, body)}
 
 
 @router.delete("/addresses/{address_id}")
@@ -132,8 +156,19 @@ async def quote_cart_endpoint(
     who is ordering report why they cannot apply rather than failing the quote.
     """
     quote = await quote_cart(body.items, body.couponCode, user.id if user else None)
+    result = {"ok": True, **quote.to_dict()}
 
-    return {"ok": True, **quote.to_dict()}
+    # Whether the restaurant delivers to the chosen address, so the cart can
+    # say so before checkout rather than at it.
+    if body.addressId and user:
+        address = next(
+            (a for a in await address_service.list_addresses(user.id) if a["id"] == body.addressId), None
+        )
+
+        if address:
+            result["serviceable"] = quote_serviceability(quote, address["latitude"], address["longitude"]).to_dict()
+
+    return result
 
 
 @router.post("/orders", status_code=201)

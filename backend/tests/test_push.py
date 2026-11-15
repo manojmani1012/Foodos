@@ -13,7 +13,7 @@ from app.components.notifications import push
 from app.config import get_settings
 from app.database import execute, fetchval
 
-from test_delivery import accepted_order, requests_for, rider, step
+from test_delivery import HOME, RESTAURANT, accepted_order, code_for, go_to, requests_for, rider, step
 from test_restaurant_portal import make_item, owner_with_restaurant, place_customer_order, sign_in
 
 OWNER_TOKEN = "ExponentPushToken[owner-phone]"
@@ -159,8 +159,9 @@ class TestTheWholeTrip:
         assert phones.titles(RIDER_TOKEN)[-1] == "Food is ready"
 
         await step(client, arjun, offer["id"], "picked-up")
+        await go_to(client, arjun, HOME)
         await step(client, arjun, offer["id"], "arrived")
-        await step(client, arjun, offer["id"], "delivered", cashCollected=True)
+        await step(client, arjun, offer["id"], "delivered", cashCollected=True, code=await code_for(offer["id"]))
 
         assert phones.titles(CUSTOMER_TOKEN) == [
             "Order confirmed",
@@ -169,22 +170,34 @@ class TestTheWholeTrip:
             "Your order is here",
             "Order delivered",
         ]
-        # A cash order: the customer is reminded to have the money ready.
+        # A cash order: the customer is reminded to have the money ready, and
+        # to give the rider their code.
         arrived = phones.to(CUSTOMER_TOKEN)[3]
         assert "keep ₹" in arrived["body"]
+        assert f"Share code {await code_for(offer['id'])}" in arrived["body"]
 
-    async def test_only_riders_who_could_take_it_are_told(self, client, phones):
-        ready = await rider(client, "9100000001")
-        offline = await rider(client, "9100000002", online=False)
-        elsewhere = await rider(client, "9100000003", city="Coimbatore")
-        for session, token in ((ready, "ExponentPushToken[ready]"), (offline, "ExponentPushToken[offline]"), (elsewhere, "ExponentPushToken[elsewhere]")):
+    async def test_only_the_rider_it_is_offered_to_is_told(self, client, phones):
+        nearest = await rider(client, "9100000001", at=RESTAURANT)
+        next_nearest = await rider(client, "9100000002", at=HOME)
+        offline = await rider(client, "9100000003", online=False)
+        for session, token in (
+            (nearest, "ExponentPushToken[nearest]"),
+            (next_nearest, "ExponentPushToken[next]"),
+            (offline, "ExponentPushToken[offline]"),
+        ):
             await register(client, session, token)
 
         await accepted_order(client)
 
-        assert phones.titles("ExponentPushToken[ready]") == ["New delivery request"]
+        assert phones.titles("ExponentPushToken[nearest]") == ["New delivery request"]
+        assert phones.to("ExponentPushToken[next]") == [], "one rider at a time"
         assert phones.to("ExponentPushToken[offline]") == []
-        assert phones.to("ExponentPushToken[elsewhere]") == []
+
+        # When the nearest skips it, the next rider is told.
+        offer = (await requests_for(client, nearest))[0]
+        await step(client, nearest, offer["id"], "reject")
+
+        assert phones.titles("ExponentPushToken[next]") == ["New delivery request"]
 
     async def test_a_rider_does_not_get_delivery_alerts_in_their_customer_app(self, client, phones):
         await rider(client, "9100000001")

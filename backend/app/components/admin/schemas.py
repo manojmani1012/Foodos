@@ -60,6 +60,8 @@ class RestaurantFields(BaseModel):
     gstNumber: Optional[str] = None
     commissionPct: Optional[float] = Field(default=None, ge=0, le=100)
     avgPrepMinutes: Optional[int] = Field(default=None, ge=5, le=120)
+    # Blank means the platform default.
+    deliveryRadiusKm: Optional[float] = Field(default=None, ge=1, le=30)
 
     @field_validator("description", "phone", "pincode", "fssaiNumber", "gstNumber")
     @classmethod
@@ -137,6 +139,9 @@ class CreateRestaurantBody(RestaurantFields):
     cuisines: list[str] = Field(min_length=1, max_length=6)
     addressLine: str = Field(min_length=2, max_length=160)
     city: str = Field(min_length=2, max_length=60)
+    # Required: riders navigate to it, and it decides who the outlet delivers to.
+    latitude: float
+    longitude: float
     isVeg: bool = False
     commissionPct: float = Field(default=20, ge=0, le=100)
     avgPrepMinutes: int = Field(default=30, ge=5, le=120)
@@ -183,6 +188,10 @@ class UpdateRiderBody(BaseModel):
 
 class CancelOrderBody(BaseModel):
     reason: str = Field(min_length=3, max_length=300)
+
+
+class AssignRiderBody(BaseModel):
+    riderId: str = Field(min_length=1, max_length=64)
 
 
 class BlockCustomerBody(BaseModel):

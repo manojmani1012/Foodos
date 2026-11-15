@@ -6,7 +6,9 @@ costs, so a tampered request cannot change what is charged.
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from ..geo import in_india
 
 
 class CartItem(BaseModel):
@@ -18,17 +20,32 @@ class CartItem(BaseModel):
 class QuoteBody(BaseModel):
     items: list[CartItem] = Field(min_length=1, max_length=50)
     couponCode: Optional[str] = Field(default=None, max_length=40)
+    # The address the cart is heading to, so the cart can say up front when
+    # the restaurant does not deliver there.
+    addressId: Optional[str] = None
 
 
 class AddressBody(BaseModel):
+    """A delivery address. The map pin is required: it is what the rider
+    navigates to, and what decides which restaurants deliver here. The text is
+    for the rider at the door: house or flat, area, landmark."""
+
     label: str = Field(default="Home", max_length=40)
-    line1: str = Field(min_length=1, max_length=200)
+    line1: str = Field(min_length=2, max_length=200)
     line2: Optional[str] = Field(default=None, max_length=200)
-    city: str = Field(min_length=1, max_length=80)
+    landmark: Optional[str] = Field(default=None, max_length=120)
+    city: str = Field(min_length=2, max_length=80)
     pincode: Optional[str] = Field(default=None, max_length=12)
-    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
-    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
     isDefault: bool = False
+
+    @model_validator(mode="after")
+    def _pin_in_india(self) -> "AddressBody":
+        if not in_india(self.latitude, self.longitude):
+            raise ValueError("That pin is outside India. Move it to your address")
+
+        return self
 
 
 class PlaceOrderBody(BaseModel):

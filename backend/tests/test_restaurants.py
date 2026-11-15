@@ -32,8 +32,8 @@ async def make_restaurant(
         """
         insert into restaurants
           (owner_id, name, cuisines, address_line, city, status, is_veg, rating,
-           rating_count, avg_prep_minutes)
-        values ($1, $2, $3, 'Anna Nagar', $4, $5, $6, $7, 100, $8)
+           rating_count, avg_prep_minutes, latitude, longitude)
+        values ($1, $2, $3, 'Anna Nagar', $4, $5, $6, $7, 100, $8, 13.085, 80.2101)
         returning id
         """,
         owner_id,

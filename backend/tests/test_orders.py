@@ -7,7 +7,7 @@ import pytest
 
 from app.database import execute, fetchrow, fetchval
 
-ADDRESS = {"label": "Home", "line1": "12, Lake View Road", "city": "Chennai", "pincode": "600041"}
+ADDRESS = {"label": "Home", "line1": "12, Lake View Road", "city": "Chennai", "pincode": "600041", "latitude": 13.0827, "longitude": 80.227}
 
 
 async def make_restaurant(name: str = "The Biryani House", accepting: bool = True, status: str = "active"):
@@ -20,8 +20,9 @@ async def make_restaurant(name: str = "The Biryani House", accepting: bool = Tru
     return await fetchval(
         """
         insert into restaurants
-          (owner_id, name, cuisines, address_line, city, status, is_accepting_orders, avg_prep_minutes)
-        values ($1, $2, '{Biryani}', 'Anna Nagar', 'Chennai', $3, $4, 30)
+          (owner_id, name, cuisines, address_line, city, status, is_accepting_orders, avg_prep_minutes,
+           latitude, longitude)
+        values ($1, $2, '{Biryani}', 'Anna Nagar', 'Chennai', $3, $4, 30, 13.085, 80.2101)
         returning id
         """,
         owner_id,
@@ -108,8 +109,13 @@ class TestCartQuote:
             + body["packagingFeePaise"]
             + body["taxPaise"]
             - body["discountPaise"]
+            + body["roundOffPaise"]
         )
         assert body["totalPaise"] == expected
+
+        # 249 + 20 + 10 + 12.45 GST = 291.45, billed as a whole Rs 291.
+        assert body["totalPaise"] == 29100
+        assert body["roundOffPaise"] == -45
 
     async def test_add_ons_are_charged(self, client):
         restaurant = await make_restaurant()

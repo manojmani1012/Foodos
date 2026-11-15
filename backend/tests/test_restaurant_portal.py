@@ -7,7 +7,7 @@ import pytest
 
 from app.database import execute, fetchrow, fetchval
 
-ADDRESS = {"label": "Home", "line1": "12, Lake View Road", "city": "Chennai"}
+ADDRESS = {"label": "Home", "line1": "12, Lake View Road", "city": "Chennai", "latitude": 13.0827, "longitude": 80.227}
 
 
 async def sign_in(client, phone: str, role: str) -> dict:
@@ -23,8 +23,9 @@ async def make_restaurant_for(owner_id: str, name: str = "The Biryani House"):
     return await fetchval(
         """
         insert into restaurants
-          (owner_id, name, cuisines, address_line, city, status, is_accepting_orders, avg_prep_minutes)
-        values ($1::uuid, $2, '{Biryani}', 'Anna Nagar', 'Chennai', 'active', true, 30)
+          (owner_id, name, cuisines, address_line, city, status, is_accepting_orders, avg_prep_minutes,
+           latitude, longitude)
+        values ($1::uuid, $2, '{Biryani}', 'Anna Nagar', 'Chennai', 'active', true, 30, 13.085, 80.2101)
         returning id
         """,
         owner_id,

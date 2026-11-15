@@ -121,13 +121,17 @@ async def list_orders(
                o.placed_at, o.cancelled_by,
                r.id as restaurant_id, r.name as restaurant_name,
                u.id as customer_id, u.full_name as customer_name, u.phone as customer_phone,
-               d.status as delivery_status, ru.full_name as rider_name,
+               d.status as delivery_status, ru.full_name as rider_name, ru.phone as rider_phone,
+               rp.city as rider_city,
+               case when d.status = 'searching'
+                    then (extract(epoch from now() - d.created_at) / 60)::int end as rider_wait_minutes,
                (select f.status from refunds f where f.order_id = o.id order by f.created_at desc limit 1)
                  as refund_status,
                (select coalesce(sum(i.quantity), 0)::int from order_items i where i.order_id = o.id) as item_count
         {base_from}
         left join deliveries d on d.order_id = o.id
         left join users ru on ru.id = d.partner_id
+        left join delivery_partners rp on rp.user_id = d.partner_id
         {where}
         order by o.placed_at desc
         limit ${len(args) + 1} offset ${len(args) + 2}
@@ -161,6 +165,11 @@ async def list_orders(
                 },
                 "deliveryStatus": row["delivery_status"],
                 "riderName": row["rider_name"],
+                # Two riders can share a name: the list shows these beside it.
+                "riderPhone": row["rider_phone"],
+                "riderCity": row["rider_city"],
+                # How long the order has been looking for a rider, while it is.
+                "riderWaitMinutes": row["rider_wait_minutes"],
                 "refundStatus": row["refund_status"],
             }
             for row in rows
@@ -181,13 +190,17 @@ async def get_order(order_id: str) -> dict:
                d.id as delivery_id, d.status as delivery_status, d.partner_id, d.total_distance_km,
                d.base_earning_paise + d.incentive_paise + d.tip_paise as rider_pay,
                d.accepted_at, d.delivered_at as rider_delivered_at,
-               pu.full_name as rider_name, pu.phone as rider_phone
+               case when d.status = 'searching'
+                    then (extract(epoch from now() - d.created_at) / 60)::int end as rider_wait_minutes,
+               o.delivery_code,
+               pu.full_name as rider_name, pu.phone as rider_phone, pp.city as rider_city
         from orders o
         join users u on u.id = o.customer_id
         join restaurants r on r.id = o.restaurant_id
         join users ou on ou.id = r.owner_id
         left join deliveries d on d.order_id = o.id
         left join users pu on pu.id = d.partner_id
+        left join delivery_partners pp on pp.user_id = d.partner_id
         where o.id = $1
         """,
         identifier,
@@ -240,6 +253,7 @@ async def get_order(order_id: str) -> dict:
             "id": str(row["partner_id"]),
             "name": row["rider_name"],
             "phone": row["rider_phone"],
+            "city": row["rider_city"],
             "deliveryStatus": row["delivery_status"],
             "payPaise": row["rider_pay"],
             "distanceKm": float(row["total_distance_km"]) if row["total_distance_km"] is not None else None,
@@ -248,6 +262,10 @@ async def get_order(order_id: str) -> dict:
         if row["partner_id"]
         else None,
         "deliveryStatus": row["delivery_status"],
+        "riderWaitMinutes": row["rider_wait_minutes"],
+        # Support can read it to a rider whose customer cannot find the app.
+        # The view above hides it once the order is over.
+        "deliveryCode": row["delivery_code"] if row["status"] in LIVE else None,
         "commissionPaise": commission,
         "commissionPct": float(row["commission_pct"]),
         "payments": [
@@ -277,6 +295,10 @@ async def get_order(order_id: str) -> dict:
         ],
         "actions": {
             "canCancel": row["status"] in LIVE,
+            # A rider can be given the order once the restaurant has accepted,
+            # and swapped until the food is picked up.
+            "canAssignRider": row["status"] in ("preparing", "ready")
+            and row["delivery_status"] in ("searching", "accepted", "reached_restaurant"),
             # A cancelled order whose money is still captured, with no refund
             # under way: the gateway refused it, or the server died mid-call.
             "canRetryRefund": row["status"] == "cancelled"

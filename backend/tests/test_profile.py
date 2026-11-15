@@ -4,7 +4,7 @@ import pytest
 
 from app.database import execute, fetchrow, fetchval
 
-ADDRESS = {"label": "Home", "line1": "12, Lake View Road", "city": "Chennai"}
+ADDRESS = {"label": "Home", "line1": "12, Lake View Road", "city": "Chennai", "latitude": 13.0827, "longitude": 80.227}
 
 
 async def sign_in(client, phone: str = "9876543210") -> dict:
@@ -25,8 +25,8 @@ async def make_restaurant_with_item():
     await execute("insert into user_roles (user_id, role) values ($1, 'restaurant_owner')", owner)
     restaurant = await fetchval(
         """
-        insert into restaurants (owner_id, name, cuisines, address_line, city, status)
-        values ($1, 'The Biryani House', '{Biryani}', 'Anna Nagar', 'Chennai', 'active')
+        insert into restaurants (owner_id, name, cuisines, address_line, city, status, latitude, longitude)
+        values ($1, 'The Biryani House', '{Biryani}', 'Anna Nagar', 'Chennai', 'active', 13.085, 80.2101)
         returning id
         """,
         owner,

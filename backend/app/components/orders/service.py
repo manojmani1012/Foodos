@@ -6,11 +6,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from ...database import fetch, fetchrow, transaction
-from ...errors import bad_request, conflict, forbidden, not_found
+from ...errors import AppError, bad_request, conflict, forbidden, not_found
 from ..delivery import service as delivery
+from ..geo import distance_km, ride_minutes
 from ..notifications import events
 from ..payments import refunds
-from .pricing import quote_cart
+from .delivery_code import code_required, new_code
+from .pricing import quote_cart, quote_serviceability
 
 # What the customer may do, and when. The restaurant and delivery apps drive the
 # rest of the lifecycle; those transitions arrive in a later phase.
@@ -19,26 +21,34 @@ CUSTOMER_CANCELLABLE = {"pending", "confirmed"}
 # Mirrors the tracking timeline in the app.
 TIMELINE = ["confirmed", "preparing", "ready", "picked_up", "on_the_way", "delivered"]
 
+LIVE = {"confirmed", "preparing", "ready", "picked_up", "on_the_way"}
 
-def _address_to_json(address: Any) -> str:
-    return json.dumps(
-        {
-            "label": address.label,
-            "line1": address.line1,
-            "line2": address.line2,
-            "city": address.city,
-            "pincode": address.pincode,
-            "latitude": float(address.latitude) if address.latitude is not None else None,
-            "longitude": float(address.longitude) if address.longitude is not None else None,
-        }
-    )
+# India has one time zone and no daylight saving, so a fixed offset is exact.
+INDIA = timezone(timedelta(hours=5, minutes=30))
+
+# Riders may call ahead late at night, when the customer could be asleep.
+LATE_NIGHT_FROM_HOUR = 23
+LATE_NIGHT_UNTIL_HOUR = 5
 
 
-async def _resolve_address(user_id: uuid.UUID, address_id: Optional[str], inline: Any) -> str:
+def _address_to_dict(address: Any) -> dict:
+    return {
+        "label": address.label,
+        "line1": address.line1,
+        "line2": address.line2,
+        "landmark": getattr(address, "landmark", None),
+        "city": address.city,
+        "pincode": address.pincode,
+        "latitude": float(address.latitude) if address.latitude is not None else None,
+        "longitude": float(address.longitude) if address.longitude is not None else None,
+    }
+
+
+async def _resolve_address(user_id: uuid.UUID, address_id: Optional[str], inline: Any) -> dict:
     """Orders keep a snapshot of where they were sent, because a saved address
     can be edited or deleted later and the delivery record must not change."""
     if inline is not None:
-        return _address_to_json(inline)
+        return _address_to_dict(inline)
 
     if address_id is None:
         raise bad_request("address_required", "Choose a delivery address")
@@ -50,7 +60,7 @@ async def _resolve_address(user_id: uuid.UUID, address_id: Optional[str], inline
 
     row = await fetchrow(
         """
-        select label, line1, line2, city, pincode, latitude, longitude
+        select label, line1, line2, landmark, city, pincode, latitude, longitude
         from customer_addresses
         where id = $1 and user_id = $2
         """,
@@ -61,17 +71,81 @@ async def _resolve_address(user_id: uuid.UUID, address_id: Optional[str], inline
     if row is None:
         raise not_found("address_not_found", "That address is no longer saved")
 
-    return json.dumps(
-        {
-            "label": row["label"],
-            "line1": row["line1"],
-            "line2": row["line2"],
-            "city": row["city"],
-            "pincode": row["pincode"],
-            "latitude": float(row["latitude"]) if row["latitude"] is not None else None,
-            "longitude": float(row["longitude"]) if row["longitude"] is not None else None,
-        }
+    return {
+        "label": row["label"],
+        "line1": row["line1"],
+        "line2": row["line2"],
+        "landmark": row["landmark"],
+        "city": row["city"],
+        "pincode": row["pincode"],
+        "latitude": float(row["latitude"]) if row["latitude"] is not None else None,
+        "longitude": float(row["longitude"]) if row["longitude"] is not None else None,
+    }
+
+
+def _point(latitude: Any, longitude: Any) -> Optional[tuple[float, float]]:
+    if latitude is None or longitude is None:
+        return None
+
+    return float(latitude), float(longitude)
+
+
+def _eta_minutes(
+    status: str,
+    prep_minutes: int,
+    accepted_at: Optional[datetime],
+    restaurant: Optional[tuple[float, float]],
+    home: Optional[tuple[float, float]],
+    tracking: Optional[dict],
+    now: datetime,
+) -> Optional[int]:
+    """Minutes until the food reaches the door, worked out afresh on every read.
+
+    Before pickup it is whichever is later, the kitchen or the rider reaching
+    the counter, then the ride to the customer. After pickup it is the rider's
+    own distance to the customer. 0 means the rider is at the door.
+    """
+    if status not in LIVE:
+        return None
+
+    rider_status = tracking["status"] if tracking else None
+    rider = (
+        _point(tracking["location"]["latitude"], tracking["location"]["longitude"])
+        if tracking and tracking.get("location")
+        else None
     )
+
+    def ride(a, b) -> Optional[int]:
+        return ride_minutes(distance_km(*a, *b)) if a and b else None
+
+    if rider_status == "arrived":
+        return 0
+
+    last_leg = ride(restaurant, home)
+
+    if status in ("picked_up", "on_the_way"):
+        from_rider = ride(rider, home)
+
+        return max(1, (from_rider if from_rider is not None else last_leg or 15) + 1)
+
+    if status == "confirmed":
+        kitchen = prep_minutes + 2  # the restaurant still has to accept
+    elif status == "preparing" and accepted_at is not None:
+        cooked_for = (now - accepted_at).total_seconds() / 60
+        kitchen = max(0, round(prep_minutes - cooked_for))
+    elif status == "preparing":
+        kitchen = prep_minutes
+    else:
+        kitchen = 0
+
+    if rider_status == "reached_restaurant":
+        to_counter = 0
+    elif rider_status == "accepted":
+        to_counter = ride(rider, restaurant) or 5
+    else:
+        to_counter = 5  # still finding a rider
+
+    return max(1, max(kitchen, to_counter) + (last_leg if last_leg is not None else 15) + 2)
 
 
 async def _order_response(order_id: uuid.UUID) -> dict:
@@ -79,12 +153,12 @@ async def _order_response(order_id: uuid.UUID) -> dict:
         """
         select o.id, o.order_number, o.restaurant_id, o.status, o.subtotal_paise,
                o.delivery_fee_paise, o.packaging_fee_paise, o.tax_paise, o.tip_paise,
-               o.discount_paise, o.total_paise, o.payment_method, o.payment_status,
+               o.discount_paise, o.round_off_paise, o.total_paise, o.payment_method, o.payment_status,
                o.delivery_address, o.special_instructions, o.estimated_delivery_at,
-               o.placed_at, o.delivered_at, o.cancelled_at, o.cancellation_reason,
+               o.placed_at, o.delivered_at, o.cancelled_at, o.cancellation_reason, o.delivery_code,
                r.name as restaurant_name, r.address_line as restaurant_address,
                r.city as restaurant_city, r.phone as restaurant_phone,
-               r.latitude as restaurant_lat, r.longitude as restaurant_lng
+               r.latitude as restaurant_lat, r.longitude as restaurant_lng, r.avg_prep_minutes
         from orders o
         join restaurants r on r.id = o.restaurant_id
         where o.id = $1
@@ -126,6 +200,12 @@ async def _order_response(order_id: uuid.UUID) -> dict:
     )
 
     address = order["delivery_address"]
+    address = json.loads(address) if isinstance(address, str) else address
+    tracking = await delivery.tracking_for_order(order_id)
+    accepted_at = next((row["created_at"] for row in history if row["status"] == "preparing"), None)
+    now = datetime.now(timezone.utc)
+    live = order["status"] in LIVE
+    india_hour = now.astimezone(INDIA).hour
 
     return {
         "id": str(order["id"]),
@@ -140,7 +220,7 @@ async def _order_response(order_id: uuid.UUID) -> dict:
             "latitude": float(order["restaurant_lat"]) if order["restaurant_lat"] is not None else None,
             "longitude": float(order["restaurant_lng"]) if order["restaurant_lng"] is not None else None,
         },
-        "deliveryAddress": json.loads(address) if isinstance(address, str) else address,
+        "deliveryAddress": address,
         "items": [
             {
                 "id": str(item["id"]),
@@ -160,6 +240,7 @@ async def _order_response(order_id: uuid.UUID) -> dict:
         "taxPaise": order["tax_paise"],
         "tipPaise": order["tip_paise"],
         "discountPaise": order["discount_paise"],
+        "roundOffPaise": order["round_off_paise"],
         "totalPaise": order["total_paise"],
         "paymentMethod": order["payment_method"],
         "paymentStatus": order["payment_status"],
@@ -167,6 +248,21 @@ async def _order_response(order_id: uuid.UUID) -> dict:
         "estimatedDeliveryAt": order["estimated_delivery_at"].isoformat()
         if order["estimated_delivery_at"]
         else None,
+        # "Arriving in X mins", recalculated on every read; 0 = at the door.
+        "etaMinutes": _eta_minutes(
+            order["status"],
+            order["avg_prep_minutes"],
+            accepted_at,
+            _point(order["restaurant_lat"], order["restaurant_lng"]),
+            _point(address.get("latitude"), address.get("longitude")),
+            tracking,
+            now,
+        ),
+        # The code the customer tells the rider at the door, while it is needed.
+        "deliveryCode": order["delivery_code"]
+        if live and order["delivery_code"] and code_required(order["payment_method"])
+        else None,
+        "lateNight": live and (india_hour >= LATE_NIGHT_FROM_HOUR or india_hour < LATE_NIGHT_UNTIL_HOUR),
         "placedAt": order["placed_at"].isoformat(),
         "deliveredAt": order["delivered_at"].isoformat() if order["delivered_at"] else None,
         "cancelledAt": order["cancelled_at"].isoformat() if order["cancelled_at"] else None,
@@ -176,7 +272,7 @@ async def _order_response(order_id: uuid.UUID) -> dict:
         "refund": await refunds.refund_for_order(order_id),
         # The rider, once one has the order: name, vehicle, and while it is on
         # its way, their phone and live position.
-        "delivery": await delivery.tracking_for_order(order_id),
+        "delivery": tracking,
         "timeline": [
             {"status": row["status"], "note": row["note"], "at": row["created_at"].isoformat()}
             for row in history
@@ -219,13 +315,23 @@ async def place_order(
         raise bad_request("invalid_tip", "A tip cannot be negative")
 
     # Priced from the database, never from what the client sent.
-    quote = await quote_cart(items, coupon_code, user_id)
+    quote = await quote_cart(items, coupon_code, user_id, tip_paise)
 
     if coupon_code and not quote.coupon.applied:
         raise bad_request("coupon_invalid", quote.coupon.reason or "That code is not valid")
 
     delivery_address = await _resolve_address(user_id, address_id, address)
-    total = quote.total_paise + tip_paise
+
+    # The restaurant must deliver to this pin: no pin, no order, and nothing
+    # beyond the restaurant's radius (an order once went 340 km).
+    reach = quote_serviceability(quote, delivery_address["latitude"], delivery_address["longitude"])
+
+    if not reach.ok:
+        raise AppError(
+            400 if reach.code == "address_needs_pin" else 409, reach.code, reach.reason, reach.to_dict()
+        )
+
+    total = quote.total_paise
 
     async with transaction() as connection:
         is_cash = payment_method == "cod"
@@ -236,14 +342,15 @@ async def place_order(
               (customer_id, restaurant_id, delivery_address, status, subtotal_paise,
                delivery_fee_paise, packaging_fee_paise, tax_paise, tip_paise,
                discount_paise, total_paise, offer_id, payment_method, payment_status,
-               special_instructions, estimated_delivery_at, confirmed_at, idempotency_key)
+               special_instructions, estimated_delivery_at, confirmed_at, idempotency_key,
+               round_off_paise, delivery_code)
             values ($1, $2, $3::jsonb, $16, $4, $5, $6, $7, $8, $9, $10, $11,
-                    $12, 'pending', $13, $14, $17, $15)
+                    $12, 'pending', $13, $14, $17, $15, $18, $19)
             returning id
             """,
             user_id,
             uuid.UUID(quote.restaurant_id),
-            delivery_address,
+            json.dumps(delivery_address),
             quote.subtotal_paise,
             quote.delivery_fee_paise,
             quote.packaging_fee_paise,
@@ -258,6 +365,8 @@ async def place_order(
             idempotency_key,
             "confirmed" if is_cash else "pending",
             datetime.now(timezone.utc) if is_cash else None,
+            quote.round_off_paise,
+            new_code(),
         )
 
         for line in quote.lines:

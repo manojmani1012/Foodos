@@ -12,7 +12,7 @@ import pytest
 from app.database import execute, fetchrow, fetchval
 
 from test_admin import admin, make_admin  # noqa: F401 - fixture
-from test_delivery import ANNA_NAGAR, T_NAGAR, accepted_order, requests_for, rider, step
+from test_delivery import ANNA_NAGAR, T_NAGAR, accepted_order, code_for, go_to, requests_for, rider, step
 from test_refunds import paid_order, refund_gateway  # noqa: F401 - fixture
 from test_payments import fake_gateway, razorpay_configured  # noqa: F401 - fixtures
 
@@ -97,9 +97,14 @@ async def delivered_yesterday(client):
 
     offer = (await requests_for(client, arjun))[0]
     await step(client, arjun, offer["id"], "accept")
+    await step(client, arjun, offer["id"], "reached")
     await client.post(f"/api/v1/restaurant/orders/{order['id']}/ready", headers=owner["headers"])
     await step(client, arjun, offer["id"], "picked-up")
-    delivered = await step(client, arjun, offer["id"], "delivered", cashCollected=True)
+    await go_to(client, arjun, T_NAGAR)
+    await step(client, arjun, offer["id"], "arrived")
+    delivered = await step(
+        client, arjun, offer["id"], "delivered", cashCollected=True, code=await code_for(offer["id"])
+    )
     assert delivered.status_code == 200, delivered.text
 
     await execute(

@@ -6,9 +6,11 @@ restaurant and rider apps, so the figures agree with what partners see.
 
 from ...database import fetch, fetchrow
 
-# How long an order can sit before someone at Foodos should look at it.
-RESTAURANT_WAIT_MINUTES = 10
-RIDER_WAIT_MINUTES = 10
+# How long an order can sit before someone at Foodos should look at it. An
+# unaccepted order is cancelled automatically at restaurant_accept_minutes
+# (5), so it shows here first, while a call to the restaurant can still save it.
+RESTAURANT_WAIT_MINUTES = 3
+RIDER_WAIT_MINUTES = 5
 
 LIVE_STATUSES = ("pending", "confirmed", "preparing", "ready", "picked_up", "on_the_way")
 

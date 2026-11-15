@@ -12,8 +12,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from ...config import get_settings
 from ...database import fetch, fetchrow
 from ...errors import bad_request, conflict, not_found
+from ..geo import distance_km
 
 # Until delivery zones and distance are wired up, every order quotes the same
 # fee. Deliberately mirrors DEFAULT_DELIVERY_FEE_PAISE in the restaurants
@@ -26,6 +28,77 @@ PACKAGING_FEE_PAISE = 1000
 GST_RATE = 0.05
 
 MAX_LINE_QUANTITY = 20
+
+
+def round_bill(paise: int) -> tuple[int, int]:
+    """The bill to the nearest whole rupee (50 paise rounds up), and the
+    difference, which is shown as its own "Round off" line.
+
+    GST at 5% and percentage coupons produce paise; without this the customer
+    app showed Rs 146 while the rider was asked to collect Rs 145.50.
+    """
+    rounded = (paise + 50) // 100 * 100
+
+    return rounded, rounded - paise
+
+
+@dataclass
+class Serviceability:
+    ok: bool
+    distance_km: Optional[float]
+    radius_km: float
+    code: Optional[str] = None
+    reason: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "ok": self.ok,
+            "distanceKm": self.distance_km,
+            "radiusKm": self.radius_km,
+            "code": self.code,
+            "reason": self.reason,
+        }
+
+
+def serviceability(
+    restaurant_name: str,
+    restaurant_lat: Any,
+    restaurant_lng: Any,
+    radius_km: Any,
+    address_lat: Any,
+    address_lng: Any,
+) -> Serviceability:
+    """Whether a restaurant delivers to a pinned address: both must be on the
+    map, and no further apart than the restaurant's delivery radius."""
+    radius = float(radius_km) if radius_km is not None else get_settings().delivery_radius_km
+
+    if restaurant_lat is None or restaurant_lng is None:
+        return Serviceability(
+            False, None, radius, "restaurant_unavailable", f"{restaurant_name} is not taking orders right now"
+        )
+
+    if address_lat is None or address_lng is None:
+        return Serviceability(
+            False,
+            None,
+            radius,
+            "address_needs_pin",
+            "Pin your delivery address on the map, so the delivery partner can find you",
+        )
+
+    distance = distance_km(restaurant_lat, restaurant_lng, address_lat, address_lng)
+
+    if distance > radius:
+        return Serviceability(
+            False,
+            distance,
+            radius,
+            "address_too_far",
+            f"{restaurant_name} does not deliver to this address. It is {distance:.1f} km away, "
+            f"and they deliver up to {radius:g} km",
+        )
+
+    return Serviceability(True, distance, radius)
 
 
 @dataclass
@@ -72,8 +145,14 @@ class Quote:
     packaging_fee_paise: int
     tax_paise: int
     discount_paise: int
+    tip_paise: int
+    round_off_paise: int
     total_paise: int
     coupon: CouponResult
+    # Where the restaurant is and how far it delivers, for the address check.
+    restaurant_lat: Any = None
+    restaurant_lng: Any = None
+    restaurant_radius_km: Any = None
 
     def to_dict(self) -> dict:
         return {
@@ -98,6 +177,8 @@ class Quote:
             "packagingFeePaise": self.packaging_fee_paise,
             "taxPaise": self.tax_paise,
             "discountPaise": self.discount_paise,
+            "tipPaise": self.tip_paise,
+            "roundOffPaise": self.round_off_paise,
             "totalPaise": self.total_paise,
             "coupon": {
                 "code": self.coupon.code,
@@ -127,7 +208,8 @@ async def _load_lines(items: list[Any]) -> tuple[list[QuotedLine], Any]:
         """
         select i.id, i.restaurant_id, i.name, i.price_paise, i.is_veg, i.is_available,
                r.name as restaurant_name, r.status as restaurant_status,
-               r.is_accepting_orders
+               r.is_accepting_orders, r.latitude as restaurant_lat, r.longitude as restaurant_lng,
+               r.delivery_radius_km
         from menu_items i
         join restaurants r on r.id = i.restaurant_id
         where i.id = any($1::uuid[]) and i.deleted_at is null
@@ -326,7 +408,9 @@ async def _apply_coupon(
     )
 
 
-async def quote_cart(items: list[Any], coupon_code: Optional[str], user_id: Optional[uuid.UUID]) -> Quote:
+async def quote_cart(
+    items: list[Any], coupon_code: Optional[str], user_id: Optional[uuid.UUID], tip_paise: int = 0
+) -> Quote:
     lines, restaurant = await _load_lines(items)
 
     subtotal = sum(line.line_total_paise for line in lines)
@@ -337,14 +421,16 @@ async def quote_cart(items: list[Any], coupon_code: Optional[str], user_id: Opti
     coupon = await _apply_coupon(coupon_code, subtotal, delivery_fee, restaurant["restaurant_id"], user_id)
     discount = coupon.discount_paise
 
-    total = subtotal + delivery_fee + packaging_fee + tax - discount
+    before_tip = subtotal + delivery_fee + packaging_fee + tax - discount
 
     # The orders table enforces this same arithmetic, so a negative total would
     # be rejected by the database anyway; catching it here keeps the message kind.
-    if total < 0:
+    if before_tip < 0:
         discount = subtotal + delivery_fee + packaging_fee + tax
-        total = 0
+        before_tip = 0
         coupon.discount_paise = discount
+
+    total, round_off = round_bill(before_tip + tip_paise)
 
     return Quote(
         restaurant_id=str(restaurant["restaurant_id"]),
@@ -355,6 +441,22 @@ async def quote_cart(items: list[Any], coupon_code: Optional[str], user_id: Opti
         packaging_fee_paise=packaging_fee,
         tax_paise=tax,
         discount_paise=discount,
+        tip_paise=tip_paise,
+        round_off_paise=round_off,
         total_paise=total,
         coupon=coupon,
+        restaurant_lat=restaurant["restaurant_lat"],
+        restaurant_lng=restaurant["restaurant_lng"],
+        restaurant_radius_km=restaurant["delivery_radius_km"],
+    )
+
+
+def quote_serviceability(quote: Quote, address_lat: Any, address_lng: Any) -> Serviceability:
+    return serviceability(
+        quote.restaurant_name,
+        quote.restaurant_lat,
+        quote.restaurant_lng,
+        quote.restaurant_radius_km,
+        address_lat,
+        address_lng,
     )

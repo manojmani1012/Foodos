@@ -33,6 +33,7 @@ COLUMNS = {
     "gstNumber": "gst_number",
     "commissionPct": "commission_pct",
     "avgPrepMinutes": "avg_prep_minutes",
+    "deliveryRadiusKm": "delivery_radius_km",
 }
 
 STATUS_ACTIONS = {
@@ -222,6 +223,7 @@ async def get_restaurant(restaurant_id: str) -> dict:
         "gstNumber": row["gst_number"],
         "commissionPct": float(row["commission_pct"]),
         "avgPrepMinutes": row["avg_prep_minutes"],
+        "deliveryRadiusKm": float(row["delivery_radius_km"]) if row["delivery_radius_km"] is not None else None,
         "rating": float(row["rating"]),
         "ratingCount": row["rating_count"],
         "status": row["status"],
@@ -312,8 +314,9 @@ async def create_restaurant(body: Any, actor_id: uuid.UUID, ip: Optional[str]) -
             """
             insert into restaurants
               (owner_id, name, description, cuisines, address_line, city, pincode, latitude, longitude,
-               phone, is_veg, fssai_number, gst_number, commission_pct, avg_prep_minutes, status)
-            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'pending')
+               phone, is_veg, fssai_number, gst_number, commission_pct, avg_prep_minutes,
+               delivery_radius_km, status)
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'pending')
             returning id
             """,
             owner_id,
@@ -331,6 +334,7 @@ async def create_restaurant(body: Any, actor_id: uuid.UUID, ip: Optional[str]) -
             body.gstNumber,
             body.commissionPct,
             body.avgPrepMinutes,
+            body.deliveryRadiusKm,
         )
 
         await audit.record(
@@ -355,6 +359,10 @@ async def update_restaurant(restaurant_id: str, body: Any, actor_id: uuid.UUID, 
     for required in ("name", "addressLine", "city", "cuisines", "isVeg", "commissionPct", "avgPrepMinutes"):
         if required in changes and changes[required] is None:
             raise bad_request("field_required", f"{required} cannot be empty")
+
+    # The pin can be moved, never removed: customers and riders depend on it.
+    if ("latitude" in changes and changes["latitude"] is None) or ("longitude" in changes and changes["longitude"] is None):
+        raise bad_request("location_required", "A restaurant must stay pinned on the map. Move the pin instead")
 
     async with transaction() as connection:
         current = await connection.fetchrow(
@@ -404,7 +412,7 @@ async def set_status(
 
     async with transaction() as connection:
         current = await connection.fetchrow(
-            "select status, name from restaurants where id = $1 for update", identifier
+            "select status, name, latitude from restaurants where id = $1 for update", identifier
         )
 
         if current is None:
@@ -412,6 +420,12 @@ async def set_status(
 
         if current["status"] == status:
             raise conflict("status_unchanged", f"{current['name']} is already {status}")
+
+        if status == "active" and current["latitude"] is None:
+            raise conflict(
+                "location_required",
+                "Pin this restaurant on the map first. Riders navigate to the pin, and it decides who it delivers to",
+            )
 
         if status == "active":
             available = await connection.fetchval(

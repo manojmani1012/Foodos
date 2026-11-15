@@ -11,8 +11,19 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
-from ..components.admin import audit, customers, dashboard, offers, orders, payouts, restaurants, riders
+from ..components.admin import (
+    assignment,
+    audit,
+    customers,
+    dashboard,
+    offers,
+    orders,
+    payouts,
+    restaurants,
+    riders,
+)
 from ..components.admin.schemas import (
+    AssignRiderBody,
     BlockCustomerBody,
     CancelOrderBody,
     CreateOfferBody,
@@ -163,6 +174,20 @@ async def get_order(order_id: str, user: CurrentUser = Depends(admin_only)):
 @router.post("/orders/{order_id}/cancel")
 async def cancel_order(order_id: str, body: CancelOrderBody, actor: Actor = Depends(acting_admin)):
     return {"ok": True, "order": await orders.cancel(order_id, body.reason, actor.id, actor.ip)}
+
+
+@router.get("/orders/{order_id}/riders")
+async def order_riders(order_id: str, actor: Actor = Depends(acting_admin)):
+    """Riders who could take this order, nearest first."""
+    return {"ok": True, **await assignment.available_riders(order_id)}
+
+
+@router.post("/orders/{order_id}/assign")
+async def assign_rider(order_id: str, body: AssignRiderBody, actor: Actor = Depends(acting_admin)):
+    """Gives the order to a rider directly, or moves it to another rider."""
+    await assignment.assign(order_id, body.riderId, actor.id, actor.ip)
+
+    return {"ok": True, "order": await orders.get_order(order_id)}
 
 
 @router.post("/orders/{order_id}/refund")

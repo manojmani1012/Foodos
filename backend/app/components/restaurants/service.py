@@ -7,8 +7,10 @@ are invisible here and only reachable through the admin APIs.
 import uuid
 from typing import Any, Optional
 
+from ...config import get_settings
 from ...database import fetch, fetchrow, fetchval
 from ...errors import not_found
+from ..geo import distance_km, ride_minutes, sql_distance_km
 from .schemas import (
     MenuAddon,
     MenuCategory,
@@ -22,8 +24,16 @@ from .schemas import (
 # restaurant quotes the same fee. The cart API becomes the authority on price.
 DEFAULT_DELIVERY_FEE_PAISE = 2000
 
-# Riding time added on top of the kitchen's own preparation estimate.
+# Riding time added on top of the kitchen's own preparation estimate, when
+# the customer's location is not known.
 RIDE_ALLOWANCE_MINUTES = 10
+
+# The width of the "30-40 min" range shown on each card.
+ETA_SPREAD_MINUTES = 10
+
+# A restaurant without a map pin cannot be reached by a rider or checked
+# against the customer's distance, so customers never see it.
+PINNED = "r.latitude is not null and r.longitude is not null"
 
 # How close a word has to be to count as a match. 0.3 is pg_trgm's own
 # default: it accepts briyani/biryani and piza/pizza while scoring
@@ -36,8 +46,17 @@ SEARCH_SIMILARITY = 0.3
 DISH_MATCH_WEIGHT = 0.6
 
 
-def _to_summary(row: Any, favourite_ids: set[uuid.UUID]) -> RestaurantSummary:
+def _radius(row: Any) -> float:
+    radius = row["delivery_radius_km"]
+
+    return float(radius) if radius is not None else get_settings().delivery_radius_km
+
+
+def _to_summary(
+    row: Any, favourite_ids: set[uuid.UUID], distance: Optional[float] = None
+) -> RestaurantSummary:
     prep = row["avg_prep_minutes"]
+    eta_min = prep + ride_minutes(distance) if distance is not None else prep
 
     return RestaurantSummary(
         id=str(row["id"]),
@@ -49,11 +68,13 @@ def _to_summary(row: Any, favourite_ids: set[uuid.UUID]) -> RestaurantSummary:
         isVeg=row["is_veg"],
         addressLine=row["address_line"],
         city=row["city"],
-        etaMinMinutes=prep,
-        etaMaxMinutes=prep + RIDE_ALLOWANCE_MINUTES,
+        etaMinMinutes=eta_min,
+        etaMaxMinutes=eta_min + (ETA_SPREAD_MINUTES if distance is not None else RIDE_ALLOWANCE_MINUTES),
         deliveryFeePaise=DEFAULT_DELIVERY_FEE_PAISE,
         isAcceptingOrders=row["is_accepting_orders"],
         isFavourite=row["id"] in favourite_ids,
+        distanceKm=round(distance, 1) if distance is not None else None,
+        deliversHere=distance <= _radius(row) if distance is not None else None,
     )
 
 
@@ -75,8 +96,10 @@ async def list_restaurants(
     limit: int = 20,
     offset: int = 0,
     user_id: Optional[uuid.UUID] = None,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
 ) -> dict[str, Any]:
-    conditions = ["r.status = 'active'"]
+    conditions = ["r.status = 'active'", PINNED]
     args: list[Any] = []
 
     def placeholder(value: Any) -> str:
@@ -85,6 +108,15 @@ async def list_restaurants(
 
     if city:
         conditions.append(f"r.city ilike {placeholder(city)}")
+
+    # Only restaurants that deliver to the customer's pin, the way the delivery
+    # apps list them.
+    distance_sql = "null::float8"
+
+    if latitude is not None and longitude is not None:
+        distance_sql = sql_distance_km("r.latitude", "r.longitude", placeholder(latitude), placeholder(longitude))
+        default_radius = placeholder(get_settings().delivery_radius_km)
+        conditions.append(f"{distance_sql} <= coalesce(r.delivery_radius_km::float8, {default_radius}::float8)")
 
     relevance = None
 
@@ -145,10 +177,11 @@ async def list_restaurants(
     rows = await fetch(
         f"""
         select r.id, r.name, r.cuisines, r.rating, r.rating_count, r.image_url, r.is_veg,
-               r.address_line, r.city, r.avg_prep_minutes, r.is_accepting_orders
+               r.address_line, r.city, r.avg_prep_minutes, r.is_accepting_orders, r.delivery_radius_km,
+               {distance_sql} as distance_km
         from restaurants r
         where {where}
-        order by r.is_accepting_orders desc, {relevance or ""} r.rating desc, r.name
+        order by r.is_accepting_orders desc, {relevance or ""} r.rating desc, distance_km nulls last, r.name
         limit ${len(args) + 1} offset ${len(args) + 2}
         """,
         *args,
@@ -159,26 +192,32 @@ async def list_restaurants(
     favourites = await _favourite_ids(user_id)
 
     return {
-        "restaurants": [_to_summary(row, favourites) for row in rows],
+        "restaurants": [_to_summary(row, favourites, row["distance_km"]) for row in rows],
         "total": total,
         "limit": limit,
         "offset": offset,
     }
 
 
-async def get_restaurant(restaurant_id: str, user_id: Optional[uuid.UUID] = None) -> RestaurantDetail:
+async def get_restaurant(
+    restaurant_id: str,
+    user_id: Optional[uuid.UUID] = None,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
+) -> RestaurantDetail:
     try:
         identifier = uuid.UUID(restaurant_id)
     except (ValueError, TypeError):
         raise not_found("restaurant_not_found", "That restaurant is no longer available")
 
     row = await fetchrow(
-        """
+        f"""
         select r.id, r.name, r.description, r.cuisines, r.rating, r.rating_count, r.image_url,
                r.is_veg, r.address_line, r.city, r.phone, r.avg_prep_minutes,
-               r.is_accepting_orders, r.opens_at, r.closes_at
+               r.is_accepting_orders, r.opens_at, r.closes_at, r.latitude, r.longitude,
+               r.delivery_radius_km
         from restaurants r
-        where r.id = $1 and r.status = 'active'
+        where r.id = $1 and r.status = 'active' and {PINNED}
         """,
         identifier,
     )
@@ -187,7 +226,7 @@ async def get_restaurant(restaurant_id: str, user_id: Optional[uuid.UUID] = None
         raise not_found("restaurant_not_found", "That restaurant is no longer available")
 
     favourites = await _favourite_ids(user_id)
-    summary = _to_summary(row, favourites)
+    summary = _to_summary(row, favourites, distance_km(row["latitude"], row["longitude"], latitude, longitude))
 
     # One round trip for the whole menu: the restaurant screen needs every
     # category, item and add-on at once, and mobile networks punish extra calls.
@@ -314,17 +353,30 @@ async def list_offers(restaurant_id: Optional[str] = None) -> list[Offer]:
     ]
 
 
-async def list_cuisines(city: Optional[str] = None) -> list[str]:
+async def list_cuisines(
+    city: Optional[str] = None, latitude: Optional[float] = None, longitude: Optional[float] = None
+) -> list[str]:
     """The category chips on the home screen, built from what is actually on the
-    platform rather than a hard-coded list."""
+    platform rather than a hard-coded list: near the customer, when their pin
+    is known."""
+    nearby = "true"
+    args: list[Any] = [city]
+
+    if latitude is not None and longitude is not None:
+        args += [latitude, longitude, get_settings().delivery_radius_km]
+        nearby = (
+            f"{sql_distance_km('r.latitude', 'r.longitude', '$2', '$3')}"
+            " <= coalesce(r.delivery_radius_km::float8, $4::float8)"
+        )
+
     rows = await fetch(
-        """
+        f"""
         select distinct unnest(r.cuisines) as cuisine
         from restaurants r
-        where r.status = 'active' and ($1::text is null or r.city ilike $1)
+        where r.status = 'active' and {PINNED} and ($1::text is null or r.city ilike $1) and {nearby}
         order by cuisine
         """,
-        city,
+        *args,
     )
 
     return [row["cuisine"] for row in rows]
@@ -363,14 +415,19 @@ async def set_favourite(user_id: uuid.UUID, restaurant_id: str, favourite: bool)
     return favourite
 
 
-async def list_favourites(user_id: uuid.UUID) -> list[RestaurantSummary]:
+async def list_favourites(
+    user_id: uuid.UUID, latitude: Optional[float] = None, longitude: Optional[float] = None
+) -> list[RestaurantSummary]:
+    """Every saved restaurant, including ones that do not deliver to the
+    current address: those are marked, so the app can say so."""
     rows = await fetch(
-        """
+        f"""
         select r.id, r.name, r.cuisines, r.rating, r.rating_count, r.image_url, r.is_veg,
-               r.address_line, r.city, r.avg_prep_minutes, r.is_accepting_orders
+               r.address_line, r.city, r.avg_prep_minutes, r.is_accepting_orders,
+               r.latitude, r.longitude, r.delivery_radius_km
         from favourites f
         join restaurants r on r.id = f.restaurant_id
-        where f.user_id = $1 and r.status = 'active'
+        where f.user_id = $1 and r.status = 'active' and {PINNED}
         order by f.created_at desc
         """,
         user_id,
@@ -378,4 +435,7 @@ async def list_favourites(user_id: uuid.UUID) -> list[RestaurantSummary]:
 
     ids = {row["id"] for row in rows}
 
-    return [_to_summary(row, ids) for row in rows]
+    return [
+        _to_summary(row, ids, distance_km(row["latitude"], row["longitude"], latitude, longitude))
+        for row in rows
+    ]
