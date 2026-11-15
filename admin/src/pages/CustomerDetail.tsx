@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Badge, Card, ConfirmDialog, Details, Loadable, PageHeader, Stat, StatusBadge } from '../components/ui'
 import { api } from '../lib/api'
 import { formatDateTime, formatMoney, formatPhone, ORDER_STATUS, PAYMENT_METHOD, timeAgo } from '../lib/format'
+import { TestAccountCard, TestBadge } from '../components/TestAccount'
 import { useToast } from '../lib/toast'
 import type { Customer } from '../lib/types'
 import { useLoad } from '../lib/useLoad'
@@ -41,7 +42,7 @@ export default function CustomerDetail() {
               back={{ to: '/customers', label: 'Customers' }}
               title={
                 <>
-                  {customer.name || 'No name yet'} {customer.blocked && <Badge tone="danger">Blocked</Badge>}
+                  {customer.name || 'No name yet'} {customer.blocked && <Badge tone="danger">Blocked</Badge>} {customer.isTest && <TestBadge />}
                 </>
               }
               subtitle={`${formatPhone(customer.phone)} · joined ${formatDateTime(customer.joinedAt)}`}
@@ -88,6 +89,13 @@ export default function CustomerDetail() {
                   </>
                 )}
               </Card>
+
+              <TestAccountCard
+                userId={customer.id}
+                phone={customer.phone}
+                isTest={customer.isTest}
+                onChange={(isTest) => state.setData({ ...customer, isTest })}
+              />
 
               <Card title="Recent orders" actions={<Link to={`/orders?view=all&search=${encodeURIComponent(customer.phone.replace('+91', ''))}`}>All orders</Link>}>
                 {customer.recentOrders.length === 0 ? (

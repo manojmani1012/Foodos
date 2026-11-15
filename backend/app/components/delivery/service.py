@@ -247,7 +247,7 @@ async def open_requests(user_id: uuid.UUID) -> list[dict]:
         select d.id, d.created_at, q.expires_at,
                greatest(0, extract(epoch from q.expires_at - now()))::int as seconds_left,
                o.order_number, o.status as order_status, o.payment_method,
-               o.payment_status, o.total_paise, o.tip_paise, o.delivery_address,
+               o.payment_status, o.total_paise, o.tip_paise, o.delivery_address, o.is_test,
                r.name as restaurant_name, r.address_line as restaurant_area, r.city as restaurant_city,
                r.latitude as restaurant_lat, r.longitude as restaurant_lng,
                (select coalesce(sum(i.quantity), 0)::int from order_items i where i.order_id = o.id) as item_count
@@ -279,6 +279,7 @@ async def open_requests(user_id: uuid.UUID) -> list[dict]:
             {
                 "id": str(row["id"]),
                 "orderNumber": row["order_number"],
+                "isTest": row["is_test"],
                 "foodReady": row["order_status"] == "ready",
                 "restaurant": {"name": row["restaurant_name"], "area": row["restaurant_area"]},
                 "dropArea": ", ".join(filter(None, [address.get("line2") or address.get("line1"), address.get("city")])),
@@ -567,7 +568,7 @@ async def advance(
         delivery = await connection.fetchrow(
             """
             select d.id, d.status, d.partner_id, d.order_id, o.status as order_status,
-                   o.payment_method, o.payment_status, o.delivery_address,
+                   o.payment_method, o.payment_status, o.delivery_address, o.is_test,
                    r.latitude as restaurant_lat, r.longitude as restaurant_lng,
                    p.current_latitude, p.current_longitude,
                    p.last_location_at > now() - make_interval(secs => $2) as position_fresh
@@ -608,7 +609,9 @@ async def advance(
         elif delivery["position_fresh"] and delivery["current_latitude"] is not None:
             here = (float(delivery["current_latitude"]), float(delivery["current_longitude"]))
 
-        _check_place(action, delivery, here, accuracy)
+        # Test orders are run from home or the office, far from any pin.
+        if not delivery["is_test"]:
+            _check_place(action, delivery, here, accuracy)
 
         cash_order = delivery["payment_method"] == "cod" and delivery["payment_status"] != "paid"
 
@@ -676,7 +679,7 @@ async def _delivery_detail(identifier: uuid.UUID) -> dict:
                d.accepted_at, d.picked_up_at, d.delivered_at,
                o.id as order_id, o.order_number, o.status as order_status, o.payment_method,
                o.payment_status, o.total_paise, o.delivery_address, o.special_instructions,
-               o.delivery_code is not null as has_code,
+               o.delivery_code is not null as has_code, o.is_test,
                r.name as restaurant_name, r.address_line as restaurant_address, r.city as restaurant_city,
                r.phone as restaurant_phone, r.latitude as restaurant_lat, r.longitude as restaurant_lng,
                u.full_name as customer_name, u.phone as customer_phone
@@ -730,6 +733,8 @@ async def _delivery_detail(identifier: uuid.UUID) -> dict:
         "codeRequired": row["has_code"] and code_required(row["payment_method"]),
         # How close the rider must be for "reached" and "arrived".
         "geofenceMetres": get_settings().geofence_metres,
+        # A test order: no location check, so the app says so.
+        "isTest": row["is_test"],
         "earningPaise": row["base_earning_paise"] + row["incentive_paise"] + row["tip_paise"],
         "tipPaise": row["tip_paise"],
         "acceptedAt": row["accepted_at"].isoformat() if row["accepted_at"] else None,

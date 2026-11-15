@@ -45,7 +45,7 @@ async def list_customers(search: Optional[str], status: Optional[str], limit: in
 
     rows = await fetch(
         f"""
-        select u.id, u.full_name, u.phone, u.email, u.status, u.created_at, u.last_login_at,
+        select u.id, u.full_name, u.phone, u.email, u.status, u.is_test, u.created_at, u.last_login_at,
                coalesce(s.orders, 0) as orders, coalesce(s.spent, 0) as spent, s.last_order_at
         from users u
         left join lateral (
@@ -72,6 +72,7 @@ async def list_customers(search: Optional[str], status: Optional[str], limit: in
                 "phone": row["phone"],
                 "email": row["email"],
                 "blocked": row["status"] == "blocked",
+                "isTest": row["is_test"],
                 "orders": row["orders"],
                 "spentPaise": int(row["spent"]),
                 "lastOrderAt": row["last_order_at"].isoformat() if row["last_order_at"] else None,
@@ -87,7 +88,7 @@ async def get_customer(customer_id: str) -> dict:
 
     row = await fetchrow(
         """
-        select u.id, u.full_name, u.phone, u.email, u.status, u.created_at, u.last_login_at,
+        select u.id, u.full_name, u.phone, u.email, u.status, u.is_test, u.created_at, u.last_login_at,
                array(select role from user_roles where user_id = u.id order by role) as roles
         from users u
         where u.id = $1
@@ -140,6 +141,7 @@ async def get_customer(customer_id: str) -> dict:
         "phone": row["phone"],
         "email": row["email"],
         "blocked": row["status"] == "blocked",
+        "isTest": row["is_test"],
         "joinedAt": row["created_at"].isoformat(),
         "lastSignedInAt": row["last_login_at"].isoformat() if row["last_login_at"] else None,
         # The same number may also be a rider or a restaurant owner; blocking
@@ -223,3 +225,31 @@ async def set_blocked(
         await revoke_all_sessions_for_user(identifier)
 
     return await get_customer(str(identifier))
+
+
+async def set_test_account(user_id: str, is_test: bool, actor_id: uuid.UUID, ip: Optional[str]) -> dict:
+    """Marks a phone number as a test account, in every app. A test customer's
+    orders are test orders: they go only to test riders, at any distance, with
+    no location checks, and stay out of payouts."""
+    identifier = as_uuid(user_id)
+
+    async with transaction() as connection:
+        row = await connection.fetchrow(
+            "update users set is_test = $2 where id = $1 returning full_name, phone", identifier, is_test
+        )
+
+        if row is None:
+            raise not_found("account_not_found", "That account could not be found")
+
+        await audit.record(
+            actor_id,
+            "Marked as test account" if is_test else "Marked as real account",
+            "Customers",
+            "customer",
+            identifier,
+            {"name": row["full_name"], "phone": row["phone"]},
+            ip,
+            connection,
+        )
+
+    return {"id": str(identifier), "isTest": is_test}

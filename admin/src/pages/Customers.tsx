@@ -1,4 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom'
+import { TestBadge } from '../components/TestAccount'
 import { Badge, Card, Empty, Loadable, PageHeader, Pagination, SearchBox, Tabs } from '../components/ui'
 import { api } from '../lib/api'
 import { formatDate, formatMoney, formatPhone, timeAgo } from '../lib/format'
@@ -70,7 +71,7 @@ export default function Customers() {
                             <Link to={`/customers/${customer.id}`} onClick={(e) => e.stopPropagation()}>
                               {customer.name || 'No name yet'}
                             </Link>{' '}
-                            {customer.blocked && <Badge tone="danger">Blocked</Badge>}
+                            {customer.blocked && <Badge tone="danger">Blocked</Badge>} {customer.isTest && <TestBadge />}
                             <div className="sub">{formatPhone(customer.phone)}</div>
                           </td>
                           <td className="num" data-label="Orders">{customer.orders}</td>

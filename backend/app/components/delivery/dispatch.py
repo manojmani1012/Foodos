@@ -74,7 +74,7 @@ async def offer_next(delivery_id: uuid.UUID) -> Optional[uuid.UUID]:
     async with transaction() as connection:
         delivery = await connection.fetchrow(
             """
-            select d.id, d.status, d.order_id, o.status as order_status, o.tip_paise, o.delivery_address,
+            select d.id, d.status, d.order_id, o.status as order_status, o.tip_paise, o.delivery_address, o.is_test,
                    r.latitude, r.longitude,
                    extract(epoch from now() - d.created_at) / 60 as minutes_open
             from deliveries d
@@ -111,14 +111,17 @@ async def offer_next(delivery_id: uuid.UUID) -> Optional[uuid.UUID]:
         ring = min(int(float(delivery["minutes_open"]) // settings.dispatch_ring_minutes), len(radii) - 1)
         distance = sql_distance_km("p.current_latitude", "p.current_longitude", "$2", "$3")
 
+        # A test order goes only to test riders, wherever they are, so the
+        # client's staff can run one from home; a real order never goes to one.
         rider = await connection.fetchrow(
             f"""
             select p.user_id, p.current_latitude, p.current_longitude, {distance} as km
             from delivery_partners p
-            where p.status = 'active' and p.is_online
+            join users u on u.id = p.user_id
+            where p.status = 'active' and p.is_online and u.is_test = $8
               and p.current_latitude is not null and p.current_longitude is not null
               and p.last_location_at > now() - make_interval(secs => $4)
-              and {distance} <= $5
+              and ($8 or {distance} <= $5)
               and not exists (
                 select 1 from deliveries x where x.partner_id = p.user_id and x.status = any($6::text[])
               )
@@ -144,6 +147,7 @@ async def offer_next(delivery_id: uuid.UUID) -> Optional[uuid.UUID]:
             radii[ring],
             list(ACTIVE),
             EXPIRED_PAUSE_SECONDS,
+            delivery["is_test"],
         )
 
         if rider is None:

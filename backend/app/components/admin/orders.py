@@ -118,7 +118,7 @@ async def list_orders(
     rows = await fetch(
         f"""
         select o.id, o.order_number, o.status, o.total_paise, o.payment_method, o.payment_status,
-               o.placed_at, o.cancelled_by,
+               o.placed_at, o.cancelled_by, o.is_test,
                r.id as restaurant_id, r.name as restaurant_name,
                u.id as customer_id, u.full_name as customer_name, u.phone as customer_phone,
                d.status as delivery_status, ru.full_name as rider_name, ru.phone as rider_phone,
@@ -150,6 +150,7 @@ async def list_orders(
             {
                 "id": str(row["id"]),
                 "orderNumber": row["order_number"],
+                "isTest": row["is_test"],
                 "status": row["status"],
                 "totalPaise": row["total_paise"],
                 "itemCount": row["item_count"],
@@ -182,7 +183,7 @@ async def get_order(order_id: str) -> dict:
 
     row = await fetchrow(
         """
-        select o.id, o.status, o.payment_method, o.payment_status, o.cancelled_by, o.subtotal_paise,
+        select o.id, o.status, o.payment_method, o.payment_status, o.cancelled_by, o.subtotal_paise, o.is_test,
                o.confirmed_at, o.ready_at, o.picked_up_at,
                u.id as customer_id, u.full_name as customer_name, u.phone as customer_phone,
                u.status as customer_status,
@@ -266,6 +267,7 @@ async def get_order(order_id: str) -> dict:
         # Support can read it to a rider whose customer cannot find the app.
         # The view above hides it once the order is over.
         "deliveryCode": row["delivery_code"] if row["status"] in LIVE else None,
+        "isTest": row["is_test"],
         "commissionPaise": commission,
         "commissionPct": float(row["commission_pct"]),
         "payments": [

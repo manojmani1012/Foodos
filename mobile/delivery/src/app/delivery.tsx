@@ -199,7 +199,7 @@ export default function DeliveryScreen() {
 
   return (
     <SafeAreaView style={styles.screen} edges={next ? ['top'] : ['top', 'bottom']}>
-      <ScreenHeader title={pickup ? 'Pick up the order' : 'Deliver the order'} subtitle={`Order #${delivery.orderNumber}`} />
+      <ScreenHeader title={pickup ? 'Pick up the order' : 'Deliver the order'} subtitle={`Order #${delivery.orderNumber}${delivery.isTest ? ' · Test order' : ''}`} />
 
       <View style={[styles.stage, pickup ? styles.stagePickup : styles.stageDrop]}>
         <Feather name={pickup ? 'shopping-bag' : 'home'} size={16} color="#fff" />
@@ -335,7 +335,9 @@ export default function DeliveryScreen() {
             <Text style={styles.blockedHint}>Enter the customer's 4-digit code to finish.</Text>
           ) : next.action === 'reached' || next.action === 'arrived' ? (
             <Text style={styles.footerHint}>
-              Works within {delivery.geofenceMetres} m of the {next.action === 'reached' ? 'restaurant' : 'customer'}.
+              {delivery.isTest
+                ? 'Test order: works from anywhere.'
+                : `Works within ${delivery.geofenceMetres} m of the ${next.action === 'reached' ? 'restaurant' : 'customer'}.`}
             </Text>
           ) : null}
           <SwipeButton label={next.label} onComplete={onSwipe} disabled={swipeLocked} busy={busy} />

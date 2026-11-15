@@ -343,9 +343,10 @@ async def place_order(
                delivery_fee_paise, packaging_fee_paise, tax_paise, tip_paise,
                discount_paise, total_paise, offer_id, payment_method, payment_status,
                special_instructions, estimated_delivery_at, confirmed_at, idempotency_key,
-               round_off_paise, delivery_code)
+               round_off_paise, delivery_code, is_test)
             values ($1, $2, $3::jsonb, $16, $4, $5, $6, $7, $8, $9, $10, $11,
-                    $12, 'pending', $13, $14, $17, $15, $18, $19)
+                    $12, 'pending', $13, $14, $17, $15, $18, $19,
+                    (select is_test from users where id = $1))
             returning id
             """,
             user_id,

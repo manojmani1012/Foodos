@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { RiderFinder } from '../components/RiderFinder'
+import { TestBadge } from '../components/TestAccount'
 import { Badge, Card, ConfirmDialog, Details, ErrorBox, Loadable, PageHeader, StatusBadge } from '../components/ui'
 import { api } from '../lib/api'
 import {
@@ -94,7 +95,8 @@ export default function OrderDetail() {
               back={{ to: '/orders', label: 'Orders' }}
               title={
                 <>
-                  <span className="mono">{order.orderNumber}</span> <StatusBadge map={ORDER_STATUS} value={order.status} />
+                  <span className="mono">{order.orderNumber}</span> <StatusBadge map={ORDER_STATUS} value={order.status} />{' '}
+                  {order.isTest && <TestBadge />}
                 </>
               }
               subtitle={`Placed ${formatDateTime(order.placedAt)} · ${PAYMENT_METHOD[order.paymentMethod] || order.paymentMethod} · ${formatMoney(order.totalPaise)}`}

@@ -1,4 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom'
+import { TestBadge } from '../components/TestAccount'
 import { Badge, Card, Empty, Loadable, PageHeader, Pagination, SearchBox, StatusBadge, Tabs } from '../components/ui'
 import { api } from '../lib/api'
 import { formatDate, formatPhone, PARTNER_STATUS, timeAgo, VEHICLE } from '../lib/format'
@@ -85,7 +86,8 @@ export default function Riders() {
                           <td data-label="Rider">
                             <Link to={`/riders/${rider.id}`} onClick={(e) => e.stopPropagation()}>
                               {rider.name || 'No name yet'}
-                            </Link>
+                            </Link>{' '}
+                            {rider.isTest && <TestBadge />}
                             <div className="sub">{formatPhone(rider.phone)}</div>
                           </td>
                           <td data-label="City">{rider.city || <Badge tone="warning">Not set</Badge>}</td>

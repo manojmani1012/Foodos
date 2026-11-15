@@ -31,6 +31,7 @@ from ..components.admin.schemas import (
     RecordPayoutBody,
     RestaurantStatusBody,
     RiderStatusBody,
+    TestAccountBody,
     UpdateOfferBody,
     UpdateRestaurantBody,
     UpdateRiderBody,
@@ -219,6 +220,11 @@ async def block_customer(customer_id: str, body: BlockCustomerBody, actor: Actor
     customer = await customers.set_blocked(customer_id, body.blocked, body.reason, actor.id, actor.ip)
 
     return {"ok": True, "customer": customer}
+
+
+@router.post("/accounts/{user_id}/test")
+async def set_test_account(user_id: str, body: TestAccountBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "account": await customers.set_test_account(user_id, body.isTest, actor.id, actor.ip)}
 
 
 # --- Offers ----------------------------------------------------------------

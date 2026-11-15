@@ -320,6 +320,7 @@ function OfferCard({
           <Text style={styles.timerText}>{Math.max(left, 0)}s</Text>
         </View>
       </View>
+      {offer.isTest ? <Text style={styles.testNote}>Test order · no location check</Text> : null}
 
       <Leg
         icon="shopping-bag"
@@ -516,6 +517,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.warningSoft,
   },
   timerText: { ...type.smallStrong, color: colors.warning },
+  testNote: { ...type.smallStrong, color: colors.warning, marginBottom: space.sm },
 
   leg: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   legIcon: {

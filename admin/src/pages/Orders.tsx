@@ -1,4 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom'
+import { TestBadge } from '../components/TestAccount'
 import { Badge, Card, Empty, Loadable, PageHeader, Pagination, SearchBox, StatusBadge, Tabs } from '../components/ui'
 import { api } from '../lib/api'
 import {
@@ -112,7 +113,8 @@ export default function Orders() {
                           <td data-label="Order">
                             <Link className="mono" to={`/orders/${order.id}`} onClick={(e) => e.stopPropagation()}>
                               {order.orderNumber}
-                            </Link>
+                            </Link>{' '}
+                            {order.isTest && <TestBadge />}
                             <div className="sub">{plural(order.itemCount, 'item')}</div>
                           </td>
                           <td data-label="Placed">{formatDateTime(order.placedAt)}</td>

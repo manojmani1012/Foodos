@@ -14,6 +14,7 @@ import {
   titleCase,
   VEHICLE,
 } from '../lib/format'
+import { TestAccountCard, TestBadge } from '../components/TestAccount'
 import { useToast } from '../lib/toast'
 import type { Rider } from '../lib/types'
 import { useLoad } from '../lib/useLoad'
@@ -167,7 +168,7 @@ export default function RiderDetail() {
             title={
               <>
                 {rider.name || 'No name yet'} <StatusBadge map={PARTNER_STATUS} value={rider.status} />{' '}
-                {rider.isOnline && <Badge tone="success">Online</Badge>}
+                {rider.isOnline && <Badge tone="success">Online</Badge>} {rider.isTest && <TestBadge />}
               </>
             }
             subtitle={`${formatPhone(rider.phone)} · ${rider.city || 'City not set'} · joined ${formatDateTime(rider.joinedAt)}`}
@@ -249,6 +250,13 @@ export default function RiderDetail() {
                 <p className="muted">Not shared yet.</p>
               )}
             </Card>
+
+            <TestAccountCard
+              userId={rider.id}
+              phone={rider.phone}
+              isTest={rider.isTest}
+              onChange={(isTest) => state.setData({ ...rider, isTest })}
+            />
           </div>
 
           <Card title="Recent deliveries" flush>

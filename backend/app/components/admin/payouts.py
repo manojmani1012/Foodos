@@ -43,7 +43,7 @@ async def _restaurant_lines(start: datetime.date, end: datetime.date, party_id: 
         from orders o
         join restaurants r on r.id = o.restaurant_id
         join users u on u.id = r.owner_id
-        where o.status = 'delivered'
+        where o.status = 'delivered' and not o.is_test
           and o.placed_at::date between $1 and $2
           and ($3::uuid is null or r.id = $3)
         group by r.id, u.full_name, u.phone
@@ -95,7 +95,7 @@ async def _rider_lines(start: datetime.date, end: datetime.date, party_id: Optio
         join orders o on o.id = d.order_id
         join delivery_partners p on p.user_id = d.partner_id
         join users u on u.id = p.user_id
-        where d.status = 'delivered'
+        where d.status = 'delivered' and not o.is_test
           and d.delivered_at::date between $1 and $2
           and ($3::uuid is null or p.user_id = $3)
         group by p.user_id, u.full_name, u.phone

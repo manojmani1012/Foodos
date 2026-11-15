@@ -84,7 +84,7 @@ async def list_riders(
         f"""
         select p.user_id, p.vehicle_type, p.vehicle_number, p.city, p.status, p.is_online,
                p.last_location_at, p.rating, p.rating_count, p.created_at,
-               u.full_name, u.phone, u.status as account_status,
+               u.full_name, u.phone, u.status as account_status, u.is_test,
                (select count(*)::int from deliveries d where d.partner_id = p.user_id and d.status = 'delivered')
                  as delivered,
                (select count(*)::int from deliveries d
@@ -120,6 +120,7 @@ async def list_riders(
                 "status": row["status"],
                 "isOnline": row["is_online"],
                 "accountBlocked": row["account_status"] == "blocked",
+                "isTest": row["is_test"],
                 "lastSeenAt": row["last_location_at"].isoformat() if row["last_location_at"] else None,
                 "rating": float(row["rating"]),
                 "ratingCount": row["rating_count"],
@@ -138,7 +139,7 @@ async def get_rider(rider_id: str) -> dict:
 
     row = await fetchrow(
         """
-        select p.*, u.full_name, u.phone, u.status as account_status, u.last_login_at, u.created_at as user_created
+        select p.*, u.full_name, u.phone, u.status as account_status, u.is_test, u.last_login_at, u.created_at as user_created
         from delivery_partners p
         join users u on u.id = p.user_id
         where p.user_id = $1
@@ -212,6 +213,7 @@ async def get_rider(rider_id: str) -> dict:
         "status": row["status"],
         "isOnline": row["is_online"],
         "accountBlocked": row["account_status"] == "blocked",
+        "isTest": row["is_test"],
         "rating": float(row["rating"]),
         "ratingCount": row["rating_count"],
         "joinedAt": row["created_at"].isoformat(),

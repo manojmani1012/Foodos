@@ -27,6 +27,8 @@ export type Partner = {
 export type Offer = {
   id: string
   orderNumber: string
+  // From a test account: no location check, for testing from anywhere.
+  isTest: boolean
   foodReady: boolean
   restaurant: { name: string; area: string | null }
   dropArea: string
@@ -71,6 +73,8 @@ export type Delivery = {
   codeRequired: boolean
   // How close to the pin "reached" and "arrived" are allowed.
   geofenceMetres: number
+  // From a test account: "reached" and "arrived" work from anywhere.
+  isTest: boolean
   earningPaise: number
   tipPaise: number
   acceptedAt: string | null

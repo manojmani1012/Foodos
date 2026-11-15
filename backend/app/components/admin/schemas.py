@@ -194,6 +194,10 @@ class AssignRiderBody(BaseModel):
     riderId: str = Field(min_length=1, max_length=64)
 
 
+class TestAccountBody(BaseModel):
+    isTest: bool
+
+
 class BlockCustomerBody(BaseModel):
     blocked: bool
     reason: Optional[str] = Field(default=None, max_length=300)

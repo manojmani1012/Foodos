@@ -4,6 +4,7 @@ import { formatPhone, timeAgo } from '../lib/format'
 import { useToast } from '../lib/toast'
 import type { Order, RidersForOrder } from '../lib/types'
 import RidersMap from './RidersMap'
+import { TestBadge } from './TestAccount'
 import { Badge, ErrorBox, Spinner } from './ui'
 
 const OFFER_LABEL: Record<string, string> = {
@@ -131,7 +132,7 @@ export function RiderFinder({ order, onAssigned }: { order: Order; onAssigned: (
             return (
               <li key={rider.id} className="rider-option">
                 <div className="rider-option-main">
-                  <strong>{rider.name || 'No name'}</strong>{' '}
+                  <strong>{rider.name || 'No name'}</strong> {rider.isTest && <TestBadge />}{' '}
                   <span className="muted small">
                     {formatPhone(rider.phone)}
                     {rider.city ? ` · ${rider.city}` : ''}

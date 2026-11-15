@@ -112,6 +112,8 @@ export type RiderRow = {
   status: string
   isOnline: boolean
   accountBlocked: boolean
+  // A test account: gets only test orders, anywhere.
+  isTest: boolean
   lastSeenAt: string | null
   rating: number
   ratingCount: number
@@ -168,6 +170,8 @@ export type OrderRow = {
   // Minutes the order has been looking for a rider, while it is.
   riderWaitMinutes: number | null
   refundStatus: string | null
+  // Placed by a test account: test riders only, no location check, not paid out.
+  isTest: boolean
 }
 
 export type Order = {
@@ -219,6 +223,7 @@ export type Order = {
   riderWaitMinutes: number | null
   // The customer's code, for support to read to a rider who cannot get it.
   deliveryCode: string | null
+  isTest: boolean
   commissionPaise: number
   commissionPct: number
   payments: {
@@ -251,6 +256,7 @@ export type RiderOption = {
   vehicleType: string | null
   vehicleNumber: string | null
   isOnline: boolean
+  isTest: boolean
   distanceKm: number | null
   latitude: number | null
   longitude: number | null
@@ -276,6 +282,7 @@ export type CustomerRow = {
   phone: string
   email: string | null
   blocked: boolean
+  isTest: boolean
   orders: number
   spentPaise: number
   lastOrderAt: string | null
@@ -288,6 +295,7 @@ export type Customer = {
   phone: string
   email: string | null
   blocked: boolean
+  isTest: boolean
   joinedAt: string
   lastSignedInAt: string | null
   otherRoles: string[]

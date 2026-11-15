@@ -53,7 +53,7 @@ async def available_riders(order_id: str) -> dict:
 
     rows = await fetch(
         """
-        select p.user_id, u.full_name, u.phone, p.city, p.vehicle_type, p.vehicle_number, p.is_online,
+        select p.user_id, u.full_name, u.phone, u.is_test, p.city, p.vehicle_type, p.vehicle_number, p.is_online,
                p.current_latitude, p.current_longitude, p.last_location_at,
                extract(epoch from now() - p.last_location_at)::int as seconds_since_location,
                (select o.order_number from deliveries x join orders o on o.id = x.order_id
@@ -81,6 +81,7 @@ async def available_riders(order_id: str) -> dict:
                 "vehicleType": row["vehicle_type"],
                 "vehicleNumber": row["vehicle_number"],
                 "isOnline": row["is_online"],
+                "isTest": row["is_test"],
                 "distanceKm": km,
                 "latitude": float(row["current_latitude"]) if row["current_latitude"] is not None else None,
                 "longitude": float(row["current_longitude"]) if row["current_longitude"] is not None else None,
