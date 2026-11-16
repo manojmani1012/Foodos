@@ -144,6 +144,16 @@ export type Rider = Omit<RiderRow, 'deliveries' | 'deliveriesToday' | 'carryingO
     distanceKmLast7Days: number
     cashHeldTodayPaise: number
   }
+  // Cash from cash orders not yet handed over or settled; at the limit the
+  // rider gets only prepaid orders. 0 = no limit.
+  cash: {
+    inHandPaise: number
+    limitPaise: number
+    limitReached: boolean
+    deposits: { id: string; amountPaise: number; reference: string | null; recordedBy: string | null; createdAt: string }[]
+  }
+  // Fake GPS seen on their phone: times (one per 10 minutes of use).
+  fakeGps: { count: number; lastSeenAt: string | null }
   documents: RiderDocument[]
   recentDeliveries: {
     id: string
@@ -402,4 +412,18 @@ export type Activity = {
   ip: string | null
   actor: string | null
   at: string
+}
+
+// "Complete 15 trips, earn ₹250 extra", run every day until stopped.
+export type DailyTarget = {
+  id: string
+  name: string
+  targetTrips: number
+  bonusPaise: number
+  live: boolean
+  startsAt: string
+  endsAt: string | null
+  reachedToday: number
+  reachedTotal: number
+  paidTotalPaise: number
 }

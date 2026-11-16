@@ -10,7 +10,7 @@ from typing import Any, Optional
 from ...config import get_settings
 from ...database import fetch, fetchrow, fetchval
 from ...errors import not_found
-from ..geo import distance_km, ride_minutes, sql_distance_km
+from ..geo import RIDE_KMPH, ROAD_FACTOR, distance_km, ride_minutes, sql_distance_km
 from ..test_accounts import is_test_account
 from .schemas import (
     MenuAddon,
@@ -36,6 +36,20 @@ ETA_SPREAD_MINUTES = 10
 # against the customer's distance, so customers never see it.
 PINNED = "r.latitude is not null and r.longitude is not null"
 
+# Orders waiting in the kitchen (new or cooking), for the "High demand" tag.
+OPEN_ORDERS = (
+    "(select count(*)::int from orders oo"
+    " where oo.restaurant_id = r.id and oo.status in ('confirmed', 'preparing')) as open_orders"
+)
+
+# Deliveries a rider is busy with.
+RIDER_BUSY = ("accepted", "reached_restaurant", "picked_up", "arrived")
+
+SORTS = ("rating", "delivery_time", "distance")
+
+# "Fast delivery": cooking plus the ride, in minutes.
+FAST_MINUTES = 30
+
 # How close a word has to be to count as a match. 0.3 is pg_trgm's own
 # default: it accepts briyani/biryani and piza/pizza while scoring
 # genuinely unrelated words at zero.
@@ -57,7 +71,11 @@ def _to_summary(
     row: Any, favourite_ids: set[uuid.UUID], distance: Optional[float] = None, anywhere: bool = False
 ) -> RestaurantSummary:
     prep = row["avg_prep_minutes"]
-    eta_min = prep + ride_minutes(distance) if distance is not None else prep
+    settings = get_settings()
+    busy = row["open_orders"] >= settings.high_demand_open_orders
+    eta_min = (prep + ride_minutes(distance) if distance is not None else prep) + (
+        settings.high_demand_extra_minutes if busy else 0
+    )
 
     return RestaurantSummary(
         id=str(row["id"]),
@@ -76,6 +94,7 @@ def _to_summary(
         isFavourite=row["id"] in favourite_ids,
         distanceKm=round(distance, 1) if distance is not None else None,
         deliversHere=(anywhere or distance <= _radius(row)) if distance is not None else None,
+        highDemand=busy,
     )
 
 
@@ -99,6 +118,9 @@ async def list_restaurants(
     user_id: Optional[uuid.UUID] = None,
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
+    sort: Optional[str] = None,
+    min_rating: Optional[float] = None,
+    fast_only: bool = False,
 ) -> dict[str, Any]:
     conditions = ["r.status = 'active'", PINNED]
     args: list[Any] = []
@@ -175,18 +197,36 @@ async def list_restaurants(
     if veg_only:
         conditions.append("r.is_veg")
 
+    if min_rating:
+        conditions.append(f"r.rating >= {placeholder(min_rating)}")
+
+    # Cooking plus the ride, the way the cards work out "25-35 min".
+    eta_sql = f"(r.avg_prep_minutes + ceil(coalesce({distance_sql}, 0) * {ROAD_FACTOR} / {RIDE_KMPH} * 60))"
+
+    if fast_only:
+        conditions.append(f"{eta_sql} <= {FAST_MINUTES}")
+
     where = " and ".join(conditions)
 
     total = await fetchval(f"select count(*)::int from restaurants r where {where}", *args)
+
+    if sort == "rating":
+        order_by = "r.rating desc, r.rating_count desc, r.name"
+    elif sort == "delivery_time":
+        order_by = f"{eta_sql}, r.rating desc, r.name"
+    elif sort == "distance":
+        order_by = "distance_km nulls last, r.name"
+    else:
+        order_by = f'{relevance or ""} r.rating desc, distance_km nulls last, r.name'
 
     rows = await fetch(
         f"""
         select r.id, r.name, r.cuisines, r.rating, r.rating_count, r.image_url, r.is_veg,
                r.address_line, r.city, r.avg_prep_minutes, r.is_accepting_orders, r.delivery_radius_km,
-               {distance_sql} as distance_km
+               {distance_sql} as distance_km, {OPEN_ORDERS}
         from restaurants r
         where {where}
-        order by r.is_accepting_orders desc, {relevance or ""} r.rating desc, distance_km nulls last, r.name
+        order by r.is_accepting_orders desc, {order_by}
         limit ${len(args) + 1} offset ${len(args) + 2}
         """,
         *args,
@@ -198,10 +238,74 @@ async def list_restaurants(
 
     return {
         "restaurants": [_to_summary(row, favourites, row["distance_km"], anywhere) for row in rows],
+        "fewRiders": await _few_riders(latitude, longitude, anywhere)
+        if latitude is not None and longitude is not None
+        else None,
         "total": total,
         "limit": limit,
         "offset": offset,
     }
+
+
+async def _few_riders(latitude: float, longitude: float, test_account: bool) -> bool:
+    """No free delivery partner near the pin right now, so the app can say
+    deliveries may take longer. Test accounts are served by test riders."""
+    settings = get_settings()
+    distance = sql_distance_km("p.current_latitude", "p.current_longitude", "$1", "$2")
+    free = await fetchval(
+        f"""
+        select count(*)::int
+        from delivery_partners p join users u on u.id = p.user_id
+        where p.status = 'active' and p.is_online and u.is_test = $5
+          and p.current_latitude is not null
+          and p.last_location_at > now() - make_interval(secs => $3)
+          and ($5 or {distance} <= $4)
+          and not exists (
+            select 1 from deliveries d where d.partner_id = p.user_id and d.status = any($6::text[])
+          )
+        """,
+        latitude,
+        longitude,
+        settings.rider_location_fresh_seconds,
+        max(settings.dispatch_radii),
+        test_account,
+        list(RIDER_BUSY),
+    )
+
+    return free == 0
+
+
+async def popular_dishes(
+    latitude: Optional[float], longitude: Optional[float], user_id: Optional[uuid.UUID] = None, limit: int = 8
+) -> list[str]:
+    """The dishes ordered most in the last 30 days from restaurants that deliver
+    to the pin, for the search suggestions."""
+    nearby = "true"
+    args: list[Any] = [limit]
+
+    if latitude is not None and longitude is not None and not await is_test_account(user_id):
+        args += [latitude, longitude, get_settings().delivery_radius_km]
+        nearby = (
+            f"{sql_distance_km('r.latitude', 'r.longitude', '$2', '$3')}"
+            " <= coalesce(r.delivery_radius_km::float8, $4::float8)"
+        )
+
+    rows = await fetch(
+        f"""
+        select i.name
+        from order_items i
+        join orders o on o.id = i.order_id
+        join restaurants r on r.id = o.restaurant_id
+        where o.status <> 'cancelled' and o.placed_at > now() - interval '30 days'
+          and r.status = 'active' and {PINNED} and {nearby}
+        group by i.name
+        order by sum(i.quantity) desc, i.name
+        limit $1
+        """,
+        *args,
+    )
+
+    return [row["name"] for row in rows]
 
 
 async def get_restaurant(
@@ -220,7 +324,7 @@ async def get_restaurant(
         select r.id, r.name, r.description, r.cuisines, r.rating, r.rating_count, r.image_url,
                r.is_veg, r.address_line, r.city, r.phone, r.avg_prep_minutes,
                r.is_accepting_orders, r.opens_at, r.closes_at, r.latitude, r.longitude,
-               r.delivery_radius_km
+               r.delivery_radius_km, {OPEN_ORDERS}
         from restaurants r
         where r.id = $1 and r.status = 'active' and {PINNED}
         """,
@@ -264,6 +368,24 @@ async def get_restaurant(
         identifier,
     )
 
+    # Up to three dishes ordered most in the last 60 days, each at least twice.
+    bestsellers = {
+        row["menu_item_id"]
+        for row in await fetch(
+            """
+            select i.menu_item_id
+            from order_items i join orders o on o.id = i.order_id
+            where o.restaurant_id = $1 and o.status <> 'cancelled'
+              and o.placed_at > now() - interval '60 days' and i.menu_item_id is not null
+            group by i.menu_item_id
+            having sum(i.quantity) >= 2
+            order by sum(i.quantity) desc
+            limit 3
+            """,
+            identifier,
+        )
+    }
+
     addons_by_item: dict[Any, list[MenuAddon]] = {}
 
     for addon in addon_rows:
@@ -300,6 +422,7 @@ async def get_restaurant(
                 rating=float(item["rating"]) if item["rating"] is not None else None,
                 ratingCount=item["rating_count"],
                 addons=addons_by_item.get(item["id"], []),
+                isBestseller=item["id"] in bestsellers,
             )
         )
 
@@ -437,7 +560,7 @@ async def list_favourites(
         f"""
         select r.id, r.name, r.cuisines, r.rating, r.rating_count, r.image_url, r.is_veg,
                r.address_line, r.city, r.avg_prep_minutes, r.is_accepting_orders,
-               r.latitude, r.longitude, r.delivery_radius_km
+               r.latitude, r.longitude, r.delivery_radius_km, {OPEN_ORDERS}
         from favourites f
         join restaurants r on r.id = f.restaurant_id
         where f.user_id = $1 and r.status = 'active' and {PINNED}

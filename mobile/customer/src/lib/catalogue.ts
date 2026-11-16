@@ -72,6 +72,8 @@ export type Restaurant = {
   // Known when the customer's pin was sent. A favourite can be out of range.
   distanceKm: number | null
   deliversHere: boolean | null
+  // Many orders waiting in its kitchen: food may take a little longer.
+  highDemand: boolean
 }
 
 export function mapRestaurant(api: any): Restaurant {
@@ -94,6 +96,7 @@ export function mapRestaurant(api: any): Restaurant {
     isFavourite: api.isFavourite,
     distanceKm: api.distanceKm ?? null,
     deliversHere: api.deliversHere ?? null,
+    highDemand: !!api.highDemand,
   }
 }
 
@@ -111,16 +114,44 @@ function query(params: Record<string, string | number | boolean | undefined | nu
   return string ? `?${string}` : ''
 }
 
+export type RestaurantSort = 'relevance' | 'rating' | 'delivery_time' | 'distance'
+
 export async function fetchRestaurants(
-  options: { search?: string; cuisine?: string; city?: string; point?: Point | null } = {},
-): Promise<{ restaurants: Restaurant[]; total: number }> {
-  const { point, ...rest } = options
-  const body = await request(`/api/v1/customer/restaurants${query({ ...rest, ...pin(point) })}`)
+  options: {
+    search?: string
+    cuisine?: string
+    city?: string
+    point?: Point | null
+    sort?: RestaurantSort
+    vegOnly?: boolean
+    minRating?: number
+    fastDelivery?: boolean
+  } = {},
+): Promise<{ restaurants: Restaurant[]; total: number; fewRiders: boolean }> {
+  const { point, sort, vegOnly, fastDelivery, ...rest } = options
+  const body = await request(
+    `/api/v1/customer/restaurants${query({
+      ...rest,
+      ...pin(point),
+      sort: sort === 'relevance' ? undefined : sort,
+      vegOnly: vegOnly || undefined,
+      fastDelivery: fastDelivery || undefined,
+    })}`,
+  )
 
   return {
     restaurants: body.restaurants.map(mapRestaurant),
     total: body.total,
+    // No free delivery partner near the pin right now.
+    fewRiders: !!body.fewRiders,
   }
+}
+
+// What people nearby order most, for the search suggestions.
+export async function fetchPopularDishes(point?: Point | null): Promise<string[]> {
+  const body = await request(`/api/v1/customer/popular-dishes${query(pin(point))}`)
+
+  return body.dishes
 }
 
 export async function fetchCuisines(point?: Point | null): Promise<{ id: string; label: string; emoji: string }[]> {
@@ -135,8 +166,19 @@ export async function fetchCuisines(point?: Point | null): Promise<{ id: string;
 
 const OFFER_COLORS = ['#1a5c35', '#e65100', '#6a1b9a', '#1565c0']
 
-export async function fetchOffers() {
-  const body = await request('/api/v1/customer/offers')
+export type OfferCard = {
+  id: string
+  code: string
+  label: string
+  sub: string
+  color: string
+  minOrder: number
+  firstOrderOnly: boolean
+}
+
+// With a restaurant: the platform's offers plus that restaurant's own.
+export async function fetchOffers(restaurantId?: string | null): Promise<OfferCard[]> {
+  const body = await request(`/api/v1/customer/offers${query({ restaurantId })}`)
 
   return body.offers.map((offer: any, index: number) => {
     const label =
@@ -158,6 +200,8 @@ export async function fetchOffers() {
       label,
       sub: conditions.join(' ') || 'On all orders',
       color: OFFER_COLORS[index % OFFER_COLORS.length],
+      minOrder: rupees(offer.minOrderPaise ?? 0),
+      firstOrderOnly: !!offer.firstOrderOnly,
     }
   })
 }
@@ -185,6 +229,8 @@ export type MenuItem = {
   imageUrl: string | null
   emoji: string
   addOns: { id: string; label: string; price: number; isAvailable: boolean }[]
+  // Among the restaurant's most ordered dishes lately.
+  isBestseller: boolean
 }
 
 export type MenuCategory = { id: string; name: string; items: MenuItem[] }
@@ -226,6 +272,7 @@ export function mapMenuItem(api: any, categoryName?: string): MenuItem {
       price: rupees(addon.pricePaise),
       isAvailable: addon.isAvailable,
     })),
+    isBestseller: !!api.isBestseller,
   }
 }
 

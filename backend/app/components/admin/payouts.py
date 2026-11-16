@@ -5,8 +5,9 @@ the food, the same sum the restaurant app shows the owner under Earnings.
 
 Riders: their pay on delivered trips (base, distance, incentives and every
 rupee of tips), less the cash they collected at the door, which is Foodos's
-money in their pocket. A rider who collected more cash than they earned owes
-the difference, and the statement says so.
+money in their pocket, plus any cash they handed over to Foodos in the period
+(so cash already deposited is not taken off their pay as well). A rider who
+kept more cash than they earned owes the difference, and the statement says so.
 
 The money itself moves outside Foodos (bank transfer or UPI). Recording a
 payout stores the amounts as they stood and the bank reference, and refuses a
@@ -85,20 +86,35 @@ async def _restaurant_lines(start: datetime.date, end: datetime.date, party_id: 
 async def _rider_lines(start: datetime.date, end: datetime.date, party_id: Optional[uuid.UUID] = None) -> list[dict]:
     rows = await fetch(
         """
+        with trips as (
+          select d.partner_id,
+                 count(d.id)::int as deliveries,
+                 sum(d.base_earning_paise)::bigint as base,
+                 sum(d.incentive_paise)::bigint as incentive,
+                 sum(d.tip_paise)::bigint as tips,
+                 coalesce(sum(o.total_paise) filter (where o.payment_method = 'cod'), 0)::bigint as cash
+          from deliveries d
+          join orders o on o.id = d.order_id
+          where d.status = 'delivered' and not o.is_test
+            and d.delivered_at::date between $1 and $2
+          group by d.partner_id
+        ),
+        deposits as (
+          select partner_id, sum(amount_paise)::bigint as deposited
+          from rider_cash_deposits
+          where created_at::date between $1 and $2
+          group by partner_id
+        )
         select p.user_id, u.full_name, u.phone, p.payout_upi_id,
-               count(d.id)::int as deliveries,
-               sum(d.base_earning_paise)::bigint as base,
-               sum(d.incentive_paise)::bigint as incentive,
-               sum(d.tip_paise)::bigint as tips,
-               coalesce(sum(o.total_paise) filter (where o.payment_method = 'cod'), 0)::bigint as cash
-        from deliveries d
-        join orders o on o.id = d.order_id
-        join delivery_partners p on p.user_id = d.partner_id
+               coalesce(t.deliveries, 0) as deliveries, coalesce(t.base, 0) as base,
+               coalesce(t.incentive, 0) as incentive, coalesce(t.tips, 0) as tips,
+               coalesce(t.cash, 0) as cash, coalesce(x.deposited, 0) as deposited
+        from delivery_partners p
         join users u on u.id = p.user_id
-        where d.status = 'delivered' and not o.is_test
-          and d.delivered_at::date between $1 and $2
+        left join trips t on t.partner_id = p.user_id
+        left join deposits x on x.partner_id = p.user_id
+        where (t.partner_id is not null or x.partner_id is not null) and not u.is_test
           and ($3::uuid is null or p.user_id = $3)
-        group by p.user_id, u.full_name, u.phone
         order by u.full_name
         """,
         start,
@@ -109,7 +125,9 @@ async def _rider_lines(start: datetime.date, end: datetime.date, party_id: Optio
     lines = []
 
     for row in rows:
-        base, incentive, tips, cash = (int(row[key]) for key in ("base", "incentive", "tips", "cash"))
+        base, incentive, tips, cash, deposited = (
+            int(row[key]) for key in ("base", "incentive", "tips", "cash", "deposited")
+        )
         gross = base + incentive + tips
 
         lines.append(
@@ -118,11 +136,17 @@ async def _rider_lines(start: datetime.date, end: datetime.date, party_id: Optio
                 "name": row["full_name"],
                 "contact": {"name": row["full_name"], "phone": row["phone"], "upi": row["payout_upi_id"]},
                 "count": row["deliveries"],
-                "breakdown": {"basePaise": base, "incentivePaise": incentive, "tipsPaise": tips, "cashCollectedPaise": cash},
+                "breakdown": {
+                    "basePaise": base,
+                    "incentivePaise": incentive,
+                    "tipsPaise": tips,
+                    "cashCollectedPaise": cash,
+                    "cashDepositedPaise": deposited,
+                },
                 "grossPaise": gross,
                 "commissionPaise": 0,
-                "adjustmentsPaise": -cash,
-                "netPaise": gross - cash,
+                "adjustmentsPaise": deposited - cash,
+                "netPaise": gross - cash + deposited,
             }
         )
 

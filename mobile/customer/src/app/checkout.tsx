@@ -16,7 +16,15 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useCart } from '@/lib/CartContext'
 import { useLocation } from '@/lib/LocationContext'
 import { formatMoney } from '@/lib/catalogue'
-import { formatAddress, hasPin, newIdempotencyKey, placeOrder, quoteCart, type Quote } from '@/lib/orders'
+import {
+  DELIVERY_PREFERENCES,
+  formatAddress,
+  hasPin,
+  newIdempotencyKey,
+  placeOrder,
+  quoteCart,
+  type Quote,
+} from '@/lib/orders'
 import { colors, radius, shadow, space, type } from '@/theme'
 
 import { Header } from './cart'
@@ -122,6 +130,9 @@ export default function CheckoutScreen() {
         idempotencyKey,
         paymentMethod: method,
         tipPaise: tip * 100,
+        cookingInstructions: cart.notes.cooking,
+        noCutlery: cart.notes.noCutlery,
+        deliveryPreferences: cart.notes.delivery,
       })
 
       // The order lives on the server now, so the local basket is done.
@@ -182,6 +193,34 @@ export default function CheckoutScreen() {
                 <Text style={styles.addAddressText}>Add a delivery address</Text>
               </Pressable>
             )}
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Delivery instructions</Text>
+            <View style={styles.prefs}>
+              {DELIVERY_PREFERENCES.map(preference => {
+                const chosen = cart.notes.delivery.includes(preference.id)
+
+                return (
+                  <Pressable
+                    key={preference.id}
+                    style={[styles.pref, chosen && styles.prefChosen]}
+                    onPress={() =>
+                      cart.setNotes({
+                        delivery: chosen
+                          ? cart.notes.delivery.filter(id => id !== preference.id)
+                          : [...cart.notes.delivery, preference.id],
+                      })
+                    }
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: chosen }}
+                  >
+                    <Feather name={preference.icon as any} size={15} color={chosen ? colors.brand : colors.muted} />
+                    <Text style={[styles.prefText, chosen && styles.prefTextChosen]}>{preference.label}</Text>
+                  </Pressable>
+                )
+              })}
+            </View>
           </View>
 
           <View style={styles.card}>
@@ -278,6 +317,11 @@ export default function CheckoutScreen() {
               <Text style={styles.billTotalLabel}>To pay</Text>
               <Text style={styles.billTotalValue}>{quote ? formatMoney(quote.total) : '—'}</Text>
             </View>
+            {quote && quote.discount > 0 && (
+              <View style={styles.savings}>
+                <Text style={styles.savingsText}>You save {formatMoney(quote.discount)} on this order</Text>
+              </View>
+            )}
           </View>
 
           {error ? (
@@ -387,6 +431,29 @@ const styles = StyleSheet.create({
   tipChipSelected: { borderColor: colors.brand, backgroundColor: colors.brand },
   tipChipText: { ...type.smallStrong, color: colors.ink },
   tipChipTextSelected: { color: colors.surface },
+
+  prefs: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
+  pref: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.lineStrong,
+  },
+  prefChosen: { borderColor: colors.brand, backgroundColor: colors.brandSoft },
+  prefText: { ...type.small, color: colors.body },
+  prefTextChosen: { color: colors.brandInk, fontWeight: '600' },
+  savings: {
+    marginTop: space.md,
+    padding: space.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.brandSoft,
+    alignItems: 'center',
+  },
+  savingsText: { ...type.smallStrong, color: colors.brandInk },
 
   summaryRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingVertical: space.xs },
   summaryQty: { ...type.smallStrong, color: colors.brand, minWidth: 26 },

@@ -27,6 +27,7 @@ import {
   type Delivery,
   type Offer,
   type Partner,
+  type Target,
 } from '@/lib/delivery'
 import { useLocationSharing } from '@/lib/LocationSharing'
 import { colors, radius, shadow, space, type } from '@/theme'
@@ -221,6 +222,24 @@ export default function HomeScreen() {
       >
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
+        {approved && partner?.fakeGps ? (
+          <Banner
+            tone="danger"
+            icon="alert-triangle"
+            title="Fake GPS detected"
+            body="Turn off any fake location app, and mock location in Developer options. Foodos cannot give you orders while it is on."
+          />
+        ) : null}
+
+        {approved && partner?.cash.limitReached ? (
+          <Banner
+            tone="warning"
+            icon="briefcase"
+            title="Cash limit reached"
+            body={`You hold ${formatRupees(partner.cash.inHandPaise)} from cash orders. Hand it over to Foodos to get cash orders again. Prepaid orders still come to you.`}
+          />
+        ) : null}
+
         <View style={styles.statsRow}>
           <Stat label="Today's earnings" value={formatRupees(partner?.today.earningsPaise ?? 0)} />
           <Stat label="Deliveries today" value={String(partner?.today.deliveries ?? 0)} />
@@ -277,6 +296,18 @@ export default function HomeScreen() {
             ))}
           </>
         )}
+
+        {approved && partner && partner.targets.length > 0 ? <Targets targets={partner.targets} /> : null}
+
+        {approved && partner && partner.cash.inHandPaise > 0 && !partner.cash.limitReached ? (
+          <View style={styles.cashLine}>
+            <Feather name="briefcase" size={16} color={colors.warning} />
+            <Text style={styles.cashLineText}>
+              Cash in hand <Text style={styles.cashLineAmount}>{formatRupees(partner.cash.inHandPaise)}</Text>
+              {partner.cash.limitPaise ? ` · limit ${formatRupees(partner.cash.limitPaise)}` : ''}
+            </Text>
+          </View>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   )
@@ -368,6 +399,62 @@ function Leg({ icon, title, detail }: { icon: keyof typeof Feather.glyphMap; tit
         <Text style={styles.legDetail} numberOfLines={1}>
           {detail}
         </Text>
+      </View>
+    </View>
+  )
+}
+
+// "Complete 15 trips, earn ₹250 extra": each target with today's progress.
+function Targets({ targets }: { targets: Target[] }) {
+  return (
+    <View style={styles.targets}>
+      <Text style={styles.sectionTitle}>Today's targets</Text>
+      {targets.map(target => {
+        const progress = Math.min(1, target.tripsDone / target.targetTrips)
+        const left = target.targetTrips - target.tripsDone
+
+        return (
+          <View key={target.id} style={styles.target}>
+            <View style={styles.targetTop}>
+              <Text style={styles.targetName}>{target.name}</Text>
+              <Text style={[styles.targetBonus, target.achieved && styles.targetBonusDone]}>
+                {target.achieved ? 'Earned' : `+${formatRupees(target.bonusPaise)}`}
+              </Text>
+            </View>
+            <View style={styles.bar}>
+              <View style={[styles.barFill, { width: `${progress * 100}%` }]} />
+            </View>
+            <Text style={styles.targetHint}>
+              {target.achieved
+                ? `${formatRupees(target.bonusPaise)} bonus added to today's earnings`
+                : `${target.tripsDone} of ${target.targetTrips} trips · ${left} to go`}
+            </Text>
+          </View>
+        )
+      })}
+    </View>
+  )
+}
+
+function Banner({
+  tone,
+  icon,
+  title,
+  body,
+}: {
+  tone: 'danger' | 'warning'
+  icon: keyof typeof Feather.glyphMap
+  title: string
+  body: string
+}) {
+  const color = tone === 'danger' ? colors.danger : colors.warning
+
+  return (
+    <View style={[styles.banner, { backgroundColor: tone === 'danger' ? colors.dangerSoft : colors.warningSoft }]}>
+      <Feather name={icon} size={18} color={color} />
+      <View style={styles.flex}>
+        <Text style={[styles.bannerTitle, { color }]}>{title}</Text>
+        <Text style={[styles.bannerBody, { color }]}>{body}</Text>
       </View>
     </View>
   )
@@ -572,6 +659,52 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brand,
   },
   acceptText: { ...type.bodyStrong, color: '#fff' },
+
+  banner: {
+    flexDirection: 'row',
+    gap: space.md,
+    marginBottom: space.md,
+    padding: space.lg,
+    borderRadius: radius.lg,
+  },
+  bannerTitle: { ...type.bodyStrong },
+  bannerBody: { ...type.small, marginTop: 2, lineHeight: 19 },
+
+  targets: { marginTop: space.lg },
+  target: {
+    marginBottom: space.sm,
+    padding: space.lg,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+    ...shadow.card,
+  },
+  targetTop: { flexDirection: 'row', alignItems: 'flex-start', gap: space.md },
+  targetName: { ...type.bodyStrong, color: colors.ink, flex: 1 },
+  targetBonus: { ...type.bodyStrong, color: colors.brand },
+  targetBonusDone: { color: colors.brandInk },
+  bar: {
+    height: 8,
+    marginTop: space.md,
+    borderRadius: radius.pill,
+    backgroundColor: colors.line,
+    overflow: 'hidden',
+  },
+  barFill: { height: '100%', borderRadius: radius.pill, backgroundColor: colors.brand },
+  targetHint: { ...type.caption, color: colors.muted, marginTop: space.sm },
+
+  cashLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginTop: space.md,
+    padding: space.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.warningSoft,
+  },
+  cashLineText: { ...type.small, color: colors.warning, flex: 1 },
+  cashLineAmount: { fontWeight: '800' },
 
   error: {
     marginBottom: space.md,

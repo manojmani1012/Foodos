@@ -27,6 +27,8 @@ export type Restaurant = {
   commissionPct: number
   opensAt: string | null
   closesAt: string | null
+  // Customers only see restaurants Foodos has pinned on the map.
+  onMap: boolean
 }
 
 export type Dashboard = {
@@ -51,6 +53,10 @@ export type OrderSummary = {
   placedAt: string
   customerName: string | null
   specialInstructions: string | null
+  // From a test account: the client's staff trying the app, not a real customer.
+  isTest: boolean
+  // While cooking: when the kitchen said it would be ready.
+  readyBy: string | null
 }
 
 export type OrderItem = {
@@ -67,6 +73,13 @@ export type OrderDetail = {
   id: string
   orderNumber: string
   status: string
+  isTest: boolean
+  // The prep time chosen on accepting, the restaurant's usual one (offered
+  // first), when the food is due, and how many more "Need more time?" asks are left.
+  prepMinutes: number | null
+  usualPrepMinutes: number
+  readyBy: string | null
+  moreTimeLeft: number
   customer: { name: string | null; phone: string | null }
   items: OrderItem[]
   subtotalPaise: number
@@ -176,8 +189,18 @@ export async function fetchOrder(orderId: string): Promise<OrderDetail> {
   return order
 }
 
-export async function acceptOrder(orderId: string): Promise<OrderDetail> {
-  const { order } = await request(`${BASE}/orders/${orderId}/accept`, { method: 'POST' })
+export async function acceptOrder(orderId: string, prepMinutes?: number): Promise<OrderDetail> {
+  const { order } = await request(`${BASE}/orders/${orderId}/accept`, {
+    method: 'POST',
+    body: prepMinutes ? { prepMinutes } : undefined,
+  })
+
+  return order
+}
+
+// "Need more time?": the customer's arrival time moves too, and they are told.
+export async function addPrepTime(orderId: string, minutes: number): Promise<OrderDetail> {
+  const { order } = await request(`${BASE}/orders/${orderId}/more-time`, { method: 'POST', body: { minutes } })
 
   return order
 }

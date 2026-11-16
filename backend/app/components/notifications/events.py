@@ -205,6 +205,23 @@ async def order_accepted(order_id: uuid.UUID) -> None:
 
 
 @_quietly
+async def prep_delayed(order_id: uuid.UUID, minutes: int) -> None:
+    """The kitchen asked for more time; the arrival time in the app moves too."""
+    order = await _order(order_id)
+
+    if order is None:
+        return
+
+    await push.notify(
+        [order["customer_id"]],
+        "customer",
+        "Your food needs a little longer",
+        f"{order['restaurant_name']} is taking about {minutes} more minutes to prepare your order.",
+        _order_link(order),
+    )
+
+
+@_quietly
 async def rider_assigned(order_id: uuid.UUID) -> None:
     order = await _order(order_id)
 

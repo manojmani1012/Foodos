@@ -173,7 +173,14 @@ export default function OrdersScreen() {
               onPress={() => router.push({ pathname: '/order/[id]', params: { id: item.id } })}
             >
               <View style={styles.cardTop}>
-                <Text style={styles.orderNumber}>#{item.orderNumber}</Text>
+                <View style={styles.numberRow}>
+                  <Text style={styles.orderNumber}>#{item.orderNumber}</Text>
+                  {item.isTest ? (
+                    <View style={styles.testTag}>
+                      <Text style={styles.testTagText}>TEST</Text>
+                    </View>
+                  ) : null}
+                </View>
                 {queue === 'past' && FINISHED[item.status] ? (
                   <View style={[styles.statusPill, { backgroundColor: FINISHED[item.status].soft }]}>
                     <Text style={[styles.statusPillText, { color: FINISHED[item.status].tone }]}>
@@ -186,6 +193,7 @@ export default function OrdersScreen() {
               </View>
 
               <Text style={styles.customer}>{item.customerName || 'Customer'}</Text>
+              {item.readyBy ? <Text style={styles.readyBy}>Ready by {formatTime(item.readyBy)}</Text> : null}
 
               {item.specialInstructions ? (
                 <View style={styles.noteRow}>
@@ -258,6 +266,15 @@ const styles = StyleSheet.create({
   orderNumber: { ...type.bodyStrong, color: colors.ink },
   time: { ...type.caption, color: colors.muted },
   statusPill: { paddingHorizontal: space.sm, paddingVertical: 2, borderRadius: radius.pill },
+  numberRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  testTag: {
+    paddingHorizontal: space.sm,
+    paddingVertical: 1,
+    borderRadius: radius.pill,
+    backgroundColor: colors.warning,
+  },
+  testTagText: { ...type.caption, fontWeight: '800', color: '#fff', letterSpacing: 0.5 },
+  readyBy: { ...type.caption, color: '#1565c0', fontWeight: '700', marginTop: 2 },
   statusPillText: { ...type.caption, fontWeight: '700' },
   customer: { ...type.small, color: colors.body, marginTop: space.xs },
 

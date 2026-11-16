@@ -1,4 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom'
+import { DailyTargets } from '../components/DailyTargets'
 import { TestBadge } from '../components/TestAccount'
 import { Badge, Card, Empty, Loadable, PageHeader, Pagination, SearchBox, StatusBadge, Tabs } from '../components/ui'
 import { api } from '../lib/api'
@@ -129,6 +130,8 @@ export default function Riders() {
           }
         </Loadable>
       </Card>
+
+      <DailyTargets />
     </>
   )
 }

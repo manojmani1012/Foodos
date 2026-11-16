@@ -16,6 +16,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import {
   acceptOrder,
+  addPrepTime,
   fetchOrder,
   formatRupees,
   formatTime,
@@ -26,6 +27,13 @@ import {
   type Refund,
 } from '@/lib/restaurant'
 import { colors, radius, shadow, space, type } from '@/theme'
+
+// "Food will be ready in": the kitchen's own time for each order, as on
+// Swiggy and Zomato. The restaurant's usual time is added if it is not here.
+const PREP_CHOICES = [10, 15, 20, 30, 45, 60]
+
+// "Need more time?" steps.
+const MORE_TIME = [5, 10]
 
 const STATUS_LABEL: Record<string, string> = {
   pending: 'Awaiting payment',
@@ -49,6 +57,7 @@ export default function OrderDetailScreen() {
   const [error, setError] = useState('')
   const [rejecting, setRejecting] = useState(false)
   const [reason, setReason] = useState('')
+  const [prep, setPrep] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -129,6 +138,10 @@ export default function OrderDetailScreen() {
   const isNew = order.status === 'confirmed'
   const isPreparing = order.status === 'preparing'
   const hasFooter = !rejecting && (isNew || isPreparing)
+  const prepChoices = [...new Set([...PREP_CHOICES, order.usualPrepMinutes])].sort((a, b) => a - b)
+  const chosenPrep = prep ?? order.usualPrepMinutes
+  // Recomputed on every refresh (every 15 seconds while cooking).
+  const minutesLeft = order.readyBy ? Math.round((new Date(order.readyBy).getTime() - Date.now()) / 60000) : null
 
   return (
     <SafeAreaView style={styles.screen} edges={hasFooter ? ['top'] : ['top', 'bottom']}>
@@ -138,8 +151,14 @@ export default function OrderDetailScreen() {
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
         <View style={styles.statusCard}>
-          <Text style={styles.statusText}>{STATUS_LABEL[order.status] ?? order.status}</Text>
+          <View style={styles.statusTop}>
+            <Text style={styles.statusText}>{STATUS_LABEL[order.status] ?? order.status}</Text>
+            {order.isTest ? <TestTag /> : null}
+          </View>
           <Text style={styles.statusMeta}>Placed at {formatTime(order.placedAt)}</Text>
+          {order.isTest ? (
+            <Text style={styles.testHint}>A test order from the Foodos team. Handle it like a real one.</Text>
+          ) : null}
           {order.cancellationReason ? (
             <Text style={styles.cancelReason}>Reason: {order.cancellationReason}</Text>
           ) : null}
@@ -258,6 +277,57 @@ export default function OrderDetailScreen() {
       {hasFooter ? (
         <View style={[styles.footer, { paddingBottom: space.lg + insets.bottom }]}>
           {isNew ? (
+            <Text style={styles.prepLabel}>Food will be ready in</Text>
+          ) : null}
+          {isNew ? (
+            <View style={styles.prepRow}>
+              {prepChoices.map(minutes => (
+                <Pressable
+                  key={minutes}
+                  style={[styles.prepChip, chosenPrep === minutes && styles.prepChipOn]}
+                  onPress={() => setPrep(minutes)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: chosenPrep === minutes }}
+                >
+                  <Text style={[styles.prepChipText, chosenPrep === minutes && styles.prepChipTextOn]}>
+                    {minutes} min
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+          {isPreparing && order.readyBy ? (
+            <View style={styles.readyRow}>
+              <View style={styles.flex}>
+                <Text style={[styles.readyBy, minutesLeft !== null && minutesLeft < 0 && styles.late]}>
+                  Ready by {formatTime(order.readyBy)}
+                </Text>
+                <Text style={[styles.readyHint, minutesLeft !== null && minutesLeft < 0 && styles.late]}>
+                  {minutesLeft === null
+                    ? ''
+                    : minutesLeft < 0
+                      ? `Running ${-minutesLeft} min late`
+                      : minutesLeft === 0
+                        ? 'Due now'
+                        : `${minutesLeft} min left`}
+                </Text>
+              </View>
+              {order.moreTimeLeft > 0
+                ? MORE_TIME.map(minutes => (
+                    <Pressable
+                      key={minutes}
+                      style={[styles.moreTime, busy && styles.disabled]}
+                      disabled={busy}
+                      onPress={() => run(() => addPrepTime(String(id), minutes), 'Could not add more time')}
+                      accessibilityLabel={`Need ${minutes} more minutes`}
+                    >
+                      <Text style={styles.moreTimeText}>+{minutes} min</Text>
+                    </Pressable>
+                  ))
+                : null}
+            </View>
+          ) : null}
+          {isNew ? (
             <View style={styles.actionRow}>
               <Pressable
                 style={[styles.ghostButton, styles.flex]}
@@ -279,13 +349,13 @@ export default function OrderDetailScreen() {
 
               <Pressable
                 style={[styles.primaryButton, styles.flexTwo, busy && styles.disabled]}
-                onPress={() => run(() => acceptOrder(String(id)), 'Could not accept this order')}
+                onPress={() => run(() => acceptOrder(String(id), chosenPrep), 'Could not accept this order')}
                 disabled={busy}
               >
                 {busy ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.primaryButtonText}>Accept and start cooking</Text>
+                  <Text style={styles.primaryButtonText}>Accept · ready in {chosenPrep} min</Text>
                 )}
               </Pressable>
             </View>
@@ -389,6 +459,14 @@ function RiderCard({ collection }: { collection: Collection }) {
   )
 }
 
+function TestTag() {
+  return (
+    <View style={styles.testTag}>
+      <Text style={styles.testTagText}>TEST</Text>
+    </View>
+  )
+}
+
 function Header({ onBack, title }: { onBack: () => void; title: string }) {
   return (
     <View style={styles.header}>
@@ -442,7 +520,43 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     backgroundColor: colors.brandSoft,
   },
+  statusTop: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   statusText: { ...type.heading, color: colors.brandInk },
+  testTag: {
+    paddingHorizontal: space.sm,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    backgroundColor: colors.warning,
+  },
+  testTagText: { ...type.caption, fontWeight: '800', color: '#fff', letterSpacing: 0.5 },
+  testHint: { ...type.caption, color: colors.warning, marginTop: space.xs },
+
+  prepLabel: { ...type.overline, color: colors.muted },
+  prepRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.sm },
+  prepChip: {
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.line,
+    backgroundColor: colors.surface,
+  },
+  prepChipOn: { borderColor: colors.brand, backgroundColor: colors.brandSoft },
+  prepChipText: { ...type.smallStrong, color: colors.body },
+  prepChipTextOn: { color: colors.brandInk },
+
+  readyRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginBottom: space.md },
+  readyBy: { ...type.bodyStrong, color: colors.ink },
+  readyHint: { ...type.caption, color: colors.muted, marginTop: 1 },
+  late: { color: colors.danger },
+  moreTime: {
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.brand,
+  },
+  moreTimeText: { ...type.smallStrong, color: colors.brand },
   statusMeta: { ...type.caption, color: colors.body, marginTop: 2 },
   cancelReason: { ...type.small, color: colors.danger, marginTop: space.sm },
 

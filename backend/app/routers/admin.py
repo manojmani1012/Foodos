@@ -22,13 +22,16 @@ from ..components.admin import (
     payouts,
     restaurants,
     riders,
+    targets,
 )
 from ..components.admin.schemas import (
     AssignRiderBody,
     BlockCustomerBody,
     CancelOrderBody,
+    CashDepositBody,
     CreateOfferBody,
     CreateRestaurantBody,
+    CreateTargetBody,
     RecordPayoutBody,
     ReviewDocumentBody,
     RestaurantStatusBody,
@@ -171,6 +174,31 @@ async def review_rider_document(
     rider = await riders.review_document(rider_id, doc_type, body.status, body.reason, actor.id, actor.ip)
 
     return {"ok": True, "rider": rider}
+
+
+@router.post("/riders/{rider_id}/cash-deposits")
+async def record_cash_deposit(rider_id: str, body: CashDepositBody, actor: Actor = Depends(acting_admin)):
+    rider = await riders.record_cash_deposit(rider_id, body.amountPaise, body.reference, actor.id, actor.ip)
+
+    return {"ok": True, "rider": rider}
+
+
+# --- Daily targets for riders ----------------------------------------------
+
+
+@router.get("/targets")
+async def list_targets(user: CurrentUser = Depends(admin_only)):
+    return {"ok": True, "targets": await targets.list_targets()}
+
+
+@router.post("/targets", status_code=201)
+async def create_target(body: CreateTargetBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "target": await targets.create_target(body, actor.id, actor.ip)}
+
+
+@router.post("/targets/{target_id}/stop")
+async def stop_target(target_id: str, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "target": await targets.stop_target(target_id, actor.id, actor.ip)}
 
 
 # --- Orders ----------------------------------------------------------------

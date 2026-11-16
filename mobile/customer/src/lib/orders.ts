@@ -166,7 +166,21 @@ export type Order = {
   // on its way.
   delivery: Tracking | null
   timeline: { status: string; note: string | null; at: string }[]
+  cookingInstructions: string | null
+  noCutlery: boolean
+  deliveryPreferences: DeliveryPreference[]
+  // The customer's rating of the delivery, once given.
+  riderReview: { rating: number; comment: string | null } | null
 }
+
+export type DeliveryPreference = 'leave_at_door' | 'no_bell' | 'no_call' | 'pet_at_home'
+
+export const DELIVERY_PREFERENCES: { id: DeliveryPreference; label: string; icon: string }[] = [
+  { id: 'leave_at_door', label: 'Leave at the door', icon: 'home' },
+  { id: 'no_bell', label: "Don't ring the bell", icon: 'bell-off' },
+  { id: 'no_call', label: 'Avoid calling', icon: 'phone-off' },
+  { id: 'pet_at_home', label: 'Pet at home', icon: 'alert-circle' },
+]
 
 export type Tracking = {
   status: 'searching' | 'accepted' | 'reached_restaurant' | 'picked_up' | 'arrived' | 'delivered' | 'cancelled'
@@ -212,6 +226,10 @@ export function mapOrder(api: any): Order {
     refund: api.refund ? { status: api.refund.status, amount: rupees(api.refund.amountPaise) } : null,
     delivery: api.delivery ?? null,
     timeline: api.timeline || [],
+    cookingInstructions: api.cookingInstructions ?? null,
+    noCutlery: !!api.noCutlery,
+    deliveryPreferences: api.deliveryPreferences ?? [],
+    riderReview: api.riderReview ?? null,
   }
 }
 
@@ -231,6 +249,9 @@ export async function placeOrder(options: {
   idempotencyKey: string
   paymentMethod?: string
   tipPaise?: number
+  cookingInstructions?: string
+  noCutlery?: boolean
+  deliveryPreferences?: DeliveryPreference[]
 }): Promise<Order> {
   const body = await request('/api/v1/customer/orders', {
     method: 'POST',
@@ -241,6 +262,9 @@ export async function placeOrder(options: {
       addressId: options.addressId,
       idempotencyKey: options.idempotencyKey,
       tipPaise: options.tipPaise ?? 0,
+      cookingInstructions: options.cookingInstructions?.trim() || null,
+      noCutlery: !!options.noCutlery,
+      deliveryPreferences: options.deliveryPreferences ?? [],
     },
   })
 
@@ -253,6 +277,22 @@ export async function invoiceUrl(orderId: string): Promise<string> {
   const body = await request(`/api/v1/customer/orders/${orderId}/invoice`, { method: 'POST' })
 
   return `${API_BASE_URL}${body.url}`
+}
+
+// The order still on its way, for the bar at the bottom of the app.
+export async function fetchActiveOrder(): Promise<Order | null> {
+  const body = await request('/api/v1/customer/orders/active')
+
+  return body.order ? mapOrder(body.order) : null
+}
+
+export async function reviewRider(orderId: string, rating: number, comment?: string) {
+  const body = await request(`/api/v1/customer/orders/${orderId}/rider-review`, {
+    method: 'POST',
+    body: { rating, comment: comment?.trim() || null },
+  })
+
+  return body.riderReview as { rating: number; comment: string | null }
 }
 
 export async function fetchOrder(id: string): Promise<Order> {

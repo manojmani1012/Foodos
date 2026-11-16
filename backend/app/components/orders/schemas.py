@@ -57,10 +57,21 @@ class PlaceOrderBody(BaseModel):
     addressId: Optional[str] = None
     address: Optional[AddressBody] = None
     specialInstructions: Optional[str] = Field(default=None, max_length=500)
+    # For the kitchen ("less spicy"), and for the rider ("leave at the door").
+    cookingInstructions: Optional[str] = Field(default=None, max_length=200)
+    noCutlery: bool = False
+    deliveryPreferences: list[Literal["leave_at_door", "no_bell", "no_call", "pet_at_home"]] = Field(
+        default_factory=list, max_length=4
+    )
     tipPaise: int = Field(default=0, ge=0, le=100000)
     # Generated per checkout attempt by the client, so a retry after a dropped
     # connection returns the original order instead of placing a second one.
     idempotencyKey: Optional[str] = Field(default=None, min_length=8, max_length=100)
+
+
+class RiderReviewBody(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: Optional[str] = Field(default=None, max_length=300)
 
 
 class CancelOrderBody(BaseModel):

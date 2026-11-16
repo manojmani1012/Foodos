@@ -5,6 +5,8 @@ import { useEffect } from 'react'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 
 import { AuthProvider, useAuth } from '@/lib/AuthContext'
+// Defines the background location task before anything can start it.
+import '@/lib/LocationSharing'
 import { PushNotifications } from '@/lib/PushNotifications'
 
 // Hold the splash until we know whether this rider is already signed in, so a

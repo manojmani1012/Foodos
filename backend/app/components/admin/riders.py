@@ -5,13 +5,18 @@ online. Someone at Foodos checks them (licence, vehicle, a call) and approves
 them here. Suspending or rejecting a rider also takes them offline at once; a
 delivery already in their hands can still be finished, so food is never
 stranded mid-trip.
+
+Cash a rider collects on cash orders is Foodos's. When they hand it over, an
+admin records the deposit here, which brings their cash in hand back under the
+limit so they get cash orders again.
 """
 
 import uuid
 from typing import Any, Optional
 
 from ...database import fetch, fetchrow, fetchval, transaction
-from ...errors import conflict, not_found
+from ...errors import bad_request, conflict, not_found
+from ..delivery import cash
 from ..delivery.documents import REQUIRED as REQUIRED_DOCUMENTS
 from ..delivery.documents import as_view as documents_view
 from ..delivery.documents import check_type
@@ -25,6 +30,11 @@ STATUS_ACTIONS = {
     "suspended": "Suspended rider",
     "rejected": "Rejected rider",
 }
+
+
+def _rupees(paise: int) -> str:
+    value = paise / 100
+    return f"₹{value:,.0f}" if value == int(value) else f"₹{value:,.2f}"
 
 
 def as_uuid(value: str) -> uuid.UUID:
@@ -235,6 +245,14 @@ async def get_rider(rider_id: str) -> dict:
             "distanceKmLast7Days": round(stats["km_7"], 1),
             "cashHeldTodayPaise": int(cash_today),
         },
+        # All cash not yet handed over or settled in a payout, the limit, and
+        # the deposits recorded so far.
+        "cash": {**await cash.summary(identifier), "deposits": await cash.deposits(identifier)},
+        # Fake GPS seen on their phone: times (one per 10 minutes of use) and when last.
+        "fakeGps": {
+            "count": row["mock_location_count"],
+            "lastSeenAt": row["mock_location_at"].isoformat() if row["mock_location_at"] else None,
+        },
         # Every required document, uploaded or not; the photo is fetched with
         # the admin's sign-in, never from a public link.
         "documents": [
@@ -396,6 +414,59 @@ async def review_document(
             "rider",
             identifier,
             {"name": row["full_name"], "document": REQUIRED_DOCUMENTS[doc_type], "reason": reason},
+            ip,
+            connection,
+        )
+
+    return await get_rider(str(identifier))
+
+
+async def record_cash_deposit(
+    rider_id: str, amount_paise: int, reference: Optional[str], actor_id: uuid.UUID, ip: Optional[str]
+) -> dict:
+    """Cash the rider has handed over to Foodos. It cannot be more than they
+    hold, so a typing slip cannot leave Foodos owing the rider."""
+    identifier = as_uuid(rider_id)
+
+    async with transaction() as connection:
+        # Locked, so two admins recording the same handover cannot both pass the check.
+        rider = await connection.fetchrow(
+            """
+            select u.full_name from delivery_partners p join users u on u.id = p.user_id
+            where p.user_id = $1 for update of p
+            """,
+            identifier,
+        )
+
+        if rider is None:
+            raise not_found("rider_not_found", "That rider could not be found")
+
+        held = int(await connection.fetchval(f"select {cash.in_hand_sql('$1::uuid')}", identifier))
+
+        if amount_paise > held:
+            raise bad_request(
+                "deposit_too_large",
+                f"{rider['full_name'] or 'This rider'} holds only {_rupees(held)} in cash",
+            )
+
+        await connection.execute(
+            """
+            insert into rider_cash_deposits (partner_id, amount_paise, reference, recorded_by)
+            values ($1, $2, $3, $4)
+            """,
+            identifier,
+            amount_paise,
+            reference,
+            actor_id,
+        )
+
+        await audit.record(
+            actor_id,
+            "Recorded cash deposit",
+            "Riders",
+            "rider",
+            identifier,
+            {"name": rider["full_name"], "amountPaise": amount_paise, "reference": reference},
             ip,
             connection,
         )

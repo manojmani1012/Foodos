@@ -15,9 +15,18 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
+import { RiderRating } from '@/components/RiderRating'
 import { TrackingMap } from '@/components/TrackingMap'
 import { formatMoney } from '@/lib/catalogue'
-import { cancelOrder, fetchOrder, formatAddress, invoiceUrl, type Order, type Tracking } from '@/lib/orders'
+import {
+  cancelOrder,
+  DELIVERY_PREFERENCES,
+  fetchOrder,
+  formatAddress,
+  invoiceUrl,
+  type Order,
+  type Tracking,
+} from '@/lib/orders'
 import { fetchOrderReview, reviewOrder } from '@/lib/profile'
 import { colors, radius, shadow, space, type } from '@/theme'
 
@@ -135,6 +144,12 @@ export default function OrderScreen() {
   }
 
   const reached = new Map(order.timeline.map(step => [step.status, step.at]))
+  // What the customer asked for at checkout, as a reminder.
+  const notes = [
+    ...order.deliveryPreferences.map(id => DELIVERY_PREFERENCES.find(p => p.id === id)?.label).filter(Boolean),
+    order.cookingInstructions ? `Kitchen: ${order.cookingInstructions}` : null,
+    order.noCutlery ? 'No cutlery' : null,
+  ].filter(Boolean) as string[]
   const currentIndex = STEPS.reduce((last, step, index) => (reached.has(step.key) ? index : last), -1)
   const cancelled = order.status === 'cancelled'
 
@@ -370,6 +385,7 @@ export default function OrderScreen() {
             <Feather name="map-pin" size={17} color={colors.brand} />
             <Text style={styles.addressText}>{formatAddress(order.address as any)}</Text>
           </View>
+          {notes.length > 0 && <Text style={styles.notesText}>{notes.join(' · ')}</Text>}
         </View>
 
         {order.status === 'delivered' && (
@@ -436,6 +452,10 @@ export default function OrderScreen() {
               </>
             )}
           </View>
+        )}
+
+        {order.status === 'delivered' && order.delivery?.partner && (
+          <RiderRating orderId={order.id} riderName={order.delivery.partner.name} saved={order.riderReview} />
         )}
 
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -695,6 +715,7 @@ const styles = StyleSheet.create({
 
   addressRow: { flexDirection: 'row', gap: space.md, alignItems: 'flex-start' },
   addressText: { flex: 1, ...type.small, color: colors.body },
+  notesText: { ...type.caption, color: colors.muted, marginTop: space.sm },
 
   cancelledBanner: {
     alignItems: 'center',

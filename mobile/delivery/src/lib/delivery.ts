@@ -22,7 +22,27 @@ export type Partner = {
   rating: number
   ratingCount: number
   today: { deliveries: number; earningsPaise: number }
+  // A fake GPS app is on: Foodos refuses its positions until it is off.
+  fakeGps: boolean
+  // "Complete 15 trips, earn ₹250 extra", with today's progress.
+  targets: Target[]
+  cash: CashInHand
 }
+
+export type Target = {
+  id: string
+  name: string
+  targetTrips: number
+  bonusPaise: number
+  tripsDone: number
+  achieved: boolean
+}
+
+// Cash from cash orders not yet handed over to Foodos. At the limit, only
+// prepaid orders are offered until it is deposited.
+export type CashInHand = { inHandPaise: number; limitPaise: number; limitReached: boolean }
+
+export type TargetReached = { name: string; bonusPaise: number }
 
 export type Offer = {
   id: string
@@ -99,6 +119,7 @@ export type Earnings = {
     distanceKm: number
   }[]
   cashCollectedTodayPaise: number
+  cash: CashInHand
 }
 
 // --- The rider -------------------------------------------------------------
@@ -123,8 +144,9 @@ export async function setOnline(isOnline: boolean): Promise<Partner> {
   return partner
 }
 
-export function sendLocation(latitude: number, longitude: number) {
-  return request(`${BASE}/location`, { method: 'POST', body: { latitude, longitude } })
+// `mocked`: Android says the position comes from a fake GPS app.
+export function sendLocation(latitude: number, longitude: number, mocked = false) {
+  return request(`${BASE}/location`, { method: 'POST', body: { latitude, longitude, mocked } })
 }
 
 // --- Work ------------------------------------------------------------------
@@ -165,7 +187,7 @@ export const NEXT_STEP: Record<Exclude<DeliveryStatus, 'delivered'>, { action: S
 // goes with them.
 const AT_A_PLACE: StepAction[] = ['reached', 'arrived']
 
-async function hereNow(): Promise<{ latitude: number; longitude: number; accuracy?: number } | null> {
+async function hereNow(): Promise<{ latitude: number; longitude: number; accuracy?: number; mocked: boolean } | null> {
   try {
     const permission = await Location.getForegroundPermissionsAsync()
 
@@ -177,6 +199,7 @@ async function hereNow(): Promise<{ latitude: number; longitude: number; accurac
       latitude: position.coords.latitude,
       longitude: position.coords.longitude,
       accuracy: position.coords.accuracy ?? undefined,
+      mocked: position.mocked === true,
     }
   } catch {
     // The server falls back to the last position the app shared.
@@ -184,11 +207,19 @@ async function hereNow(): Promise<{ latitude: number; longitude: number; accurac
   }
 }
 
+export type StepResult = {
+  delivery: Delivery
+  // True once handed over: `delivery` is then the finished trip, with any
+  // target bonus it earned already in its pay.
+  delivered: boolean
+  targetsReached: TargetReached[]
+}
+
 export async function advance(
   id: string,
   action: StepAction,
   options: { cashCollected?: boolean; code?: string } = {},
-): Promise<Delivery | null> {
+): Promise<StepResult> {
   const here = AT_A_PLACE.includes(action) ? await hereNow() : null
   const body = {
     ...(here ?? {}),
@@ -198,7 +229,7 @@ export async function advance(
 
   // "delivered" returns the finished delivery; every other step returns the
   // one still in progress.
-  return result.delivered ? null : result.delivery
+  return { delivery: result.delivery, delivered: !!result.delivered, targetsReached: result.targetsReached ?? [] }
 }
 
 export async function fetchEarnings(days: number): Promise<Earnings> {

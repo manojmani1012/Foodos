@@ -3,6 +3,7 @@ import { Redirect, useRouter } from 'expo-router'
 import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,7 +14,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { useCart } from '@/lib/CartContext'
-import { formatMoney } from '@/lib/catalogue'
+import { fetchOffers, formatMoney, type OfferCard } from '@/lib/catalogue'
 import { useLocation } from '@/lib/LocationContext'
 import { quoteCart, type Quote } from '@/lib/orders'
 import { colors, radius, shadow, space, type } from '@/theme'
@@ -30,6 +31,8 @@ export default function CartScreen() {
   const [quote, setQuote] = useState<Quote | null>(null)
   const [pricing, setPricing] = useState(true)
   const [error, setError] = useState('')
+  const [offers, setOffers] = useState<OfferCard[] | null>(null)
+  const [browsingOffers, setBrowsingOffers] = useState(false)
 
   // Totals come from the server, so the figure shown is the figure charged.
   const price = useCallback(async () => {
@@ -55,6 +58,19 @@ export default function CartScreen() {
   useEffect(() => {
     price()
   }, [price])
+
+  // The platform's coupons plus this restaurant's own, for "View all coupons".
+  useEffect(() => {
+    fetchOffers(cart.restaurant?.id)
+      .then(setOffers)
+      .catch(() => setOffers([]))
+  }, [cart.restaurant?.id])
+
+  function applyCode(code: string) {
+    setCoupon(code)
+    setAppliedCoupon(code)
+    setBrowsingOffers(false)
+  }
 
   if (cart.lines.length === 0) {
     return (
@@ -168,6 +184,43 @@ export default function CartScreen() {
               <Text style={styles.couponFailedText}>{couponState.reason}</Text>
             </View>
           )}
+
+          {offers && offers.length > 0 && (
+            <Pressable style={styles.viewOffers} onPress={() => setBrowsingOffers(true)}>
+              <Feather name="tag" size={15} color={colors.brand} />
+              <Text style={styles.viewOffersText}>View all coupons ({offers.length})</Text>
+              <Feather name="chevron-right" size={16} color={colors.brand} />
+            </Pressable>
+          )}
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>For the restaurant</Text>
+          <TextInput
+            style={styles.notesInput}
+            placeholder="Cooking instructions, e.g. less spicy"
+            placeholderTextColor={colors.faint}
+            value={cart.notes.cooking}
+            onChangeText={cooking => cart.setNotes({ cooking })}
+            maxLength={200}
+            multiline
+          />
+          <Pressable
+            style={styles.cutlery}
+            onPress={() => cart.setNotes({ noCutlery: !cart.notes.noCutlery })}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: cart.notes.noCutlery }}
+          >
+            <Feather
+              name={cart.notes.noCutlery ? 'check-square' : 'square'}
+              size={19}
+              color={cart.notes.noCutlery ? colors.brand : colors.muted}
+            />
+            <View style={styles.flex}>
+              <Text style={styles.cutleryTitle}>Don't send cutlery</Text>
+              <Text style={styles.cutleryHint}>Less plastic, if you have your own.</Text>
+            </View>
+          </Pressable>
         </View>
 
         <View style={styles.card}>
@@ -194,6 +247,11 @@ export default function CartScreen() {
                 <Text style={styles.billTotalLabel}>To pay</Text>
                 <Text style={styles.billTotalValue}>{quote ? formatMoney(quote.total) : '—'}</Text>
               </View>
+              {quote && quote.discount > 0 && (
+                <View style={styles.savings}>
+                  <Text style={styles.savingsText}>You save {formatMoney(quote.discount)} on this order</Text>
+                </View>
+              )}
             </View>
           )}
 
@@ -207,6 +265,42 @@ export default function CartScreen() {
           ) : null}
         </View>
       </ScrollView>
+
+      <Modal visible={browsingOffers} transparent animationType="slide" onRequestClose={() => setBrowsingOffers(false)}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => setBrowsingOffers(false)}>
+          <Pressable style={[styles.sheet, { paddingBottom: space.xl + insets.bottom }]} onPress={() => {}}>
+            <Text style={styles.sheetTitle}>Coupons</Text>
+            <ScrollView style={styles.sheetList}>
+              {(offers ?? []).map(offer => {
+                const short = Math.max(0, offer.minOrder - cart.subtotal)
+                const applied = couponState?.applied && couponState.code === offer.code
+
+                return (
+                  <View key={offer.id} style={styles.offer}>
+                    <View style={styles.flex}>
+                      <Text style={styles.offerLabel}>{offer.label}</Text>
+                      <Text style={styles.offerSub}>{offer.sub}</Text>
+                      <View style={styles.offerCode}>
+                        <Text style={styles.offerCodeText}>{offer.code}</Text>
+                      </View>
+                      {short > 0 && (
+                        <Text style={styles.offerShort}>Add {formatMoney(short)} more to use this</Text>
+                      )}
+                    </View>
+                    <Pressable
+                      style={[styles.offerApply, (short > 0 || applied) && styles.disabled]}
+                      disabled={short > 0 || !!applied}
+                      onPress={() => applyCode(offer.code)}
+                    >
+                      <Text style={styles.offerApplyText}>{applied ? 'Applied' : 'Apply'}</Text>
+                    </Pressable>
+                  </View>
+                )
+              })}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <View style={[styles.bar, { paddingBottom: space.md + insets.bottom }]}>
         <View style={styles.flex}>
@@ -386,6 +480,72 @@ const styles = StyleSheet.create({
     backgroundColor: colors.warningSoft,
   },
   couponFailedText: { flex: 1, ...type.caption, color: colors.warning },
+  viewOffers: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.md },
+  viewOffersText: { flex: 1, ...type.smallStrong, color: colors.brand },
+
+  notesInput: {
+    minHeight: 44,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.lineStrong,
+    ...type.small,
+    color: colors.ink,
+    textAlignVertical: 'top',
+  },
+  cutlery: { flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: space.md },
+  cutleryTitle: { ...type.bodyStrong, color: colors.ink },
+  cutleryHint: { ...type.caption, color: colors.muted, marginTop: 1 },
+
+  savings: {
+    marginTop: space.md,
+    padding: space.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.brandSoft,
+    alignItems: 'center',
+  },
+  savingsText: { ...type.smallStrong, color: colors.brandInk },
+
+  sheetBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay },
+  sheet: {
+    maxHeight: '75%',
+    padding: space.lg,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    backgroundColor: colors.surface,
+  },
+  sheetTitle: { ...type.heading, color: colors.ink, marginBottom: space.sm },
+  sheetList: { flexGrow: 0 },
+  offer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    paddingVertical: space.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+  },
+  offerLabel: { ...type.bodyStrong, color: colors.ink },
+  offerSub: { ...type.caption, color: colors.muted, marginTop: 2 },
+  offerCode: {
+    alignSelf: 'flex-start',
+    marginTop: space.xs,
+    paddingHorizontal: space.sm,
+    paddingVertical: 2,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.brand,
+  },
+  offerCodeText: { ...type.caption, color: colors.brand, fontWeight: '700', letterSpacing: 1 },
+  offerShort: { ...type.caption, color: colors.warning, marginTop: space.xs },
+  offerApply: {
+    paddingHorizontal: space.lg,
+    paddingVertical: space.sm,
+    borderRadius: radius.md,
+    backgroundColor: colors.brand,
+  },
+  offerApplyText: { ...type.smallStrong, color: colors.surface },
 
   billUpdating: { opacity: 0.5 },
   billRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: space.xs },

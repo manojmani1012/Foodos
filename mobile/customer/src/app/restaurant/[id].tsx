@@ -9,6 +9,7 @@ import {
   SectionList,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -34,6 +35,9 @@ export default function RestaurantScreen() {
   const [activeCategory, setActiveCategory] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // Narrowing the menu, like Swiggy's veg toggle and dish search.
+  const [vegOnly, setVegOnly] = useState(false)
+  const [menuSearch, setMenuSearch] = useState('')
 
   const sectionList = useRef<SectionList<MenuItem, MenuCategory & { data: MenuItem[] }> | null>(null)
 
@@ -86,9 +90,15 @@ export default function RestaurantScreen() {
     )
   }
 
+  const term = menuSearch.trim().toLowerCase()
+  const matches = (item: MenuItem) =>
+    (!vegOnly || item.isVeg) &&
+    (!term || item.name.toLowerCase().includes(term) || (item.description ?? '').toLowerCase().includes(term))
+  const narrowed = vegOnly || !!term
+
   const sections = categories
-    .filter(category => category.items.length > 0)
-    .map(category => ({ ...category, data: category.items }))
+    .map(category => ({ ...category, data: category.items.filter(matches) }))
+    .filter(category => category.data.length > 0)
 
   function jumpToCategory(name: string) {
     setActiveCategory(name)
@@ -169,7 +179,42 @@ export default function RestaurantScreen() {
             })
           }, 120)
         }}
-        ListHeaderComponent={<RestaurantHero restaurant={restaurant} />}
+        keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={
+          <>
+            <RestaurantHero restaurant={restaurant} />
+            <View style={styles.menuTools}>
+              <View style={styles.menuSearch}>
+                <Feather name="search" size={16} color={colors.muted} />
+                <TextInput
+                  style={styles.menuSearchInput}
+                  placeholder="Search the menu"
+                  placeholderTextColor={colors.faint}
+                  value={menuSearch}
+                  onChangeText={setMenuSearch}
+                  autoCorrect={false}
+                  returnKeyType="search"
+                />
+                {menuSearch ? (
+                  <Pressable onPress={() => setMenuSearch('')} hitSlop={10}>
+                    <Feather name="x" size={15} color={colors.muted} />
+                  </Pressable>
+                ) : null}
+              </View>
+              {!restaurant.isVeg && (
+                <Pressable
+                  style={[styles.vegSwitch, vegOnly && styles.vegSwitchOn]}
+                  onPress={() => setVegOnly(value => !value)}
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: vegOnly }}
+                >
+                  <VegMark isVeg />
+                  <Text style={[styles.vegSwitchText, vegOnly && styles.vegSwitchTextOn]}>Veg only</Text>
+                </Pressable>
+              )}
+            </View>
+          </>
+        }
         renderSectionHeader={({ section }) => (
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionHeaderText}>{section.name}</Text>
@@ -206,10 +251,28 @@ export default function RestaurantScreen() {
           />
         )}
         ListEmptyComponent={
-          <View style={styles.centeredBlock}>
-            <Feather name="coffee" size={40} color={colors.faint} />
-            <Text style={styles.emptyText}>This menu is empty right now</Text>
-          </View>
+          narrowed ? (
+            <View style={styles.centeredBlock}>
+              <Feather name="search" size={40} color={colors.faint} />
+              <Text style={styles.emptyText}>
+                {term ? `No dishes matching "${menuSearch.trim()}"` : 'No veg dishes on this menu'}
+              </Text>
+              <Pressable
+                style={styles.ghostButton}
+                onPress={() => {
+                  setMenuSearch('')
+                  setVegOnly(false)
+                }}
+              >
+                <Text style={styles.ghostButtonText}>Show the full menu</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <View style={styles.centeredBlock}>
+              <Feather name="coffee" size={40} color={colors.faint} />
+              <Text style={styles.emptyText}>This menu is empty right now</Text>
+            </View>
+          )
         }
         contentContainerStyle={{ paddingBottom: (showCartBar ? 110 : space.xxl) + insets.bottom }}
       />
@@ -278,6 +341,13 @@ function RestaurantHero({ restaurant }: { restaurant: Restaurant }) {
           </View>
         )}
 
+        {restaurant.highDemand && restaurant.isAcceptingOrders && (
+          <View style={styles.demandBanner}>
+            <Feather name="zap" size={14} color={colors.warning} />
+            <Text style={styles.demandText}>High demand: the kitchen is busy, so food may take a little longer</Text>
+          </View>
+        )}
+
         {restaurant.deliversHere === false && (
           <View style={styles.closedBanner}>
             <Text style={styles.closedText}>
@@ -312,6 +382,11 @@ function MenuRow({
       <Pressable style={styles.rowBody} onPress={onOpen} disabled={unavailable}>
         <View style={styles.rowTopLine}>
           <VegMark isVeg={item.isVeg} />
+          {item.isBestseller ? (
+            <View style={styles.bestseller}>
+              <Text style={styles.bestsellerText}>★ Bestseller</Text>
+            </View>
+          ) : null}
           {item.rating ? (
             <Text style={styles.rowRating}>
               ★ {item.rating}
@@ -485,6 +560,58 @@ const styles = StyleSheet.create({
     backgroundColor: colors.dangerSoft,
   },
   closedText: { ...type.smallStrong, color: colors.danger, textAlign: 'center' },
+  demandBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginTop: space.md,
+    padding: space.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.warningSoft,
+  },
+  demandText: { flex: 1, ...type.small, color: colors.warning, fontWeight: '600' },
+
+  menuTools: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: space.lg,
+    paddingTop: space.md,
+  },
+  menuSearch: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    height: 42,
+    paddingHorizontal: space.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.lineStrong,
+  },
+  menuSearchInput: { flex: 1, ...type.small, color: colors.ink, padding: 0 },
+  vegSwitch: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
+    height: 42,
+    paddingHorizontal: space.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.lineStrong,
+  },
+  vegSwitchOn: { borderColor: colors.veg, backgroundColor: colors.brandSoft },
+  vegSwitchText: { ...type.smallStrong, color: colors.body },
+  vegSwitchTextOn: { color: colors.veg },
+  bestseller: {
+    paddingHorizontal: space.sm,
+    paddingVertical: 2,
+    borderRadius: radius.sm,
+    backgroundColor: colors.warningSoft,
+  },
+  bestsellerText: { ...type.caption, color: colors.warning, fontWeight: '700' },
 
   sectionHeader: {
     flexDirection: 'row',

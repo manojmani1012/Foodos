@@ -27,6 +27,8 @@ class MenuItem(BaseModel):
     rating: Optional[float] = None
     ratingCount: int
     addons: list[MenuAddon] = []
+    # Among the restaurant's most ordered dishes lately.
+    isBestseller: bool = False
 
 
 class MenuCategory(BaseModel):
@@ -56,6 +58,8 @@ class RestaurantSummary(BaseModel):
     # whether it delivers there. A favourite can be out of range.
     distanceKm: Optional[float] = None
     deliversHere: Optional[bool] = None
+    # Many orders waiting in its kitchen right now: food may take longer.
+    highDemand: bool = False
 
 
 class RestaurantDetail(RestaurantSummary):
@@ -69,6 +73,8 @@ class RestaurantDetail(RestaurantSummary):
 class RestaurantList(BaseModel):
     ok: bool = True
     restaurants: list[RestaurantSummary]
+    # True when no free delivery partner is near the customer's pin right now.
+    fewRiders: Optional[bool] = None
     total: int
     limit: int
     offset: int

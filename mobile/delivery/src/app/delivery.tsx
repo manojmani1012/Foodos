@@ -29,6 +29,7 @@ import {
   navigateTo,
   NEXT_STEP,
   type Delivery,
+  type TargetReached,
   type Place,
 } from '@/lib/delivery'
 import { useLocationSharing } from '@/lib/LocationSharing'
@@ -58,7 +59,11 @@ export default function DeliveryScreen() {
   const [error, setError] = useState('')
   const [blocked, setBlocked] = useState<Blocked | null>(null)
   const [code, setCode] = useState('')
-  const [finished, setFinished] = useState<{ earningPaise: number; orderNumber: string } | null>(null)
+  const [finished, setFinished] = useState<{
+    earningPaise: number
+    orderNumber: string
+    targetsReached: TargetReached[]
+  } | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -97,12 +102,17 @@ export default function DeliveryScreen() {
     setError('')
 
     try {
-      const updated = await advance(delivery.id, next.action, { cashCollected, code })
+      const result = await advance(delivery.id, next.action, { cashCollected, code })
 
-      if (updated) {
-        setDelivery(updated)
+      if (!result.delivered) {
+        setDelivery(result.delivery)
       } else {
-        setFinished({ earningPaise: delivery.earningPaise, orderNumber: delivery.orderNumber })
+        // The finished trip's pay includes any target bonus it earned.
+        setFinished({
+          earningPaise: result.delivery?.earningPaise ?? delivery.earningPaise,
+          orderNumber: delivery.orderNumber,
+          targetsReached: result.targetsReached,
+        })
         setDelivery(null)
       }
     } catch (stepError: any) {
@@ -118,6 +128,8 @@ export default function DeliveryScreen() {
         })
       } else if (codeOf === 'location_needed') {
         setBlocked({ title: 'Location is off', body: stepError.message })
+      } else if (codeOf === 'mock_location') {
+        setBlocked({ title: 'Fake GPS detected', body: stepError.message })
       } else {
         setError(stepError.message || 'Could not update the delivery')
       }
@@ -172,6 +184,14 @@ export default function DeliveryScreen() {
           <Text style={styles.doneTitle}>Delivered!</Text>
           <Text style={styles.doneHint}>Order #{finished.orderNumber}</Text>
           <Text style={styles.doneEarning}>+{formatRupees(finished.earningPaise)}</Text>
+          {finished.targetsReached.map(target => (
+            <View key={target.name} style={styles.bonus}>
+              <Feather name="award" size={18} color={colors.brandInk} />
+              <Text style={styles.bonusText}>
+                Target reached: {formatRupees(target.bonusPaise)} bonus included
+              </Text>
+            </View>
+          ))}
           <Pressable style={styles.primary} onPress={() => router.back()}>
             <Text style={styles.primaryText}>Back to orders</Text>
           </Pressable>
@@ -544,6 +564,17 @@ const styles = StyleSheet.create({
   },
   doneTitle: { ...type.display, color: colors.ink },
   doneHint: { ...type.small, color: colors.muted },
+  bonus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginTop: space.md,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+    borderRadius: radius.pill,
+    backgroundColor: colors.brandSoft,
+  },
+  bonusText: { ...type.smallStrong, color: colors.brandInk },
   doneEarning: { ...type.display, color: colors.brand, marginVertical: space.lg },
 
   emptyText: { ...type.body, color: colors.muted, textAlign: 'center' },

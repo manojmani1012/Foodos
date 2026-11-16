@@ -175,7 +175,12 @@ function StatementTable({ statement, onRecord }: { statement: Statement; onRecor
                     {formatMoney(line.grossPaise)}
                     {line.breakdown.tipsPaise > 0 && <div className="sub">incl. {formatMoney(line.breakdown.tipsPaise)} tips</div>}
                   </td>
-                  <td className="num">−{formatMoney(line.breakdown.cashCollectedPaise)}</td>
+                  <td className="num">
+                    −{formatMoney(line.breakdown.cashCollectedPaise)}
+                    {line.breakdown.cashDepositedPaise > 0 && (
+                      <div className="sub">+{formatMoney(line.breakdown.cashDepositedPaise)} handed over</div>
+                    )}
+                  </td>
                 </>
               )}
               <td className="num strong">
@@ -287,7 +292,7 @@ export default function Payouts() {
       <p className="muted small">
         {party === 'restaurant'
           ? 'Restaurants: food and packaging on delivered orders, less commission on the food at the restaurant’s current rate. The same figure the owner sees under Earnings in the Restaurant app. Orders count on the day they were placed.'
-          : 'Riders: base pay, distance pay, incentives and every rupee of tips on delivered trips, less cash collected from customers. A negative balance is cash the rider holds for Foodos. Trips count on the day they were delivered.'}
+          : 'Riders: base pay, distance pay, incentives and every rupee of tips on delivered trips, less cash collected from customers, plus cash they handed over to Foodos in the period. A negative balance is cash the rider holds for Foodos. Trips count on the day they were delivered.'}
       </p>
 
       <Card title="Recorded payouts" flush>

@@ -2,8 +2,13 @@
 
 Every function here is scoped to the restaurant the signed-in owner owns. An
 owner can never read or move another restaurant's orders.
+
+The kitchen says how long each order will take when it accepts it, and can ask
+for more time while cooking, as on Swiggy and Zomato. The customer's arrival
+time follows what the kitchen said.
 """
 
+import math
 import uuid
 from typing import Any, Optional
 
@@ -14,6 +19,7 @@ from ...errors import conflict, forbidden, not_found
 from ..media import service as media
 from ..delivery import service as delivery
 from ..notifications import events
+from ..orders.notes import kitchen_note
 from ..payments import refunds
 
 # What the restaurant is allowed to do, and from where. The customer places the
@@ -28,6 +34,11 @@ QUEUES = {
     "past": ["picked_up", "delivered", "cancelled"],
 }
 
+# "Need more time?" can be asked this often per order, and no order may be
+# planned to take longer than MAX_PREP_MINUTES from acceptance.
+MAX_PREP_EXTENSIONS = 3
+MAX_PREP_MINUTES = 120
+
 
 async def resolve_owned_restaurant(user_id: uuid.UUID) -> Any:
     """The restaurant this owner signs in as.
@@ -40,7 +51,7 @@ async def resolve_owned_restaurant(user_id: uuid.UUID) -> Any:
         """
         select id, name, description, cuisines, address_line, city, phone, image_url,
                is_veg, rating, rating_count, status, is_accepting_orders,
-               avg_prep_minutes, commission_pct, opens_at, closes_at, created_at
+               avg_prep_minutes, commission_pct, opens_at, closes_at, created_at, latitude, longitude
         from restaurants
         where owner_id = $1
         order by created_at
@@ -77,6 +88,8 @@ def restaurant_to_dict(row: Any) -> dict:
         "commissionPct": float(row["commission_pct"]),
         "opensAt": row["opens_at"].isoformat() if row["opens_at"] else None,
         "closesAt": row["closes_at"].isoformat() if row["closes_at"] else None,
+        # Customers only see restaurants pinned on the map.
+        "onMap": row["latitude"] is not None and row["longitude"] is not None,
     }
 
 
@@ -92,7 +105,7 @@ async def set_accepting_orders(restaurant_id: Any, accepting: bool) -> dict:
         where id = $1
         returning id, name, description, cuisines, address_line, city, phone, image_url,
                   is_veg, rating, rating_count, status, is_accepting_orders,
-                  avg_prep_minutes, commission_pct, opens_at, closes_at
+                  avg_prep_minutes, commission_pct, opens_at, closes_at, latitude, longitude
         """,
         restaurant_id,
         accepting,
@@ -159,17 +172,28 @@ async def dashboard(restaurant_id: Any) -> dict:
     }
 
 
+def _ready_by(row: Any) -> Optional[str]:
+    """When the kitchen said the food would be ready, while it is cooking."""
+    if row["status"] != "preparing" or row["accepted_at"] is None or row["prep_minutes"] is None:
+        return None
+
+    return (row["accepted_at"] + datetime.timedelta(minutes=row["prep_minutes"])).isoformat()
+
+
 def _order_summary(row: Any) -> dict:
     return {
         "id": str(row["id"]),
         "orderNumber": row["order_number"],
         "status": row["status"],
+        # From a test account: the client's staff trying the app, not a real customer.
+        "isTest": row["is_test"],
+        "readyBy": _ready_by(row),
         "totalPaise": row["total_paise"],
         "itemCount": row["item_count"],
         "paymentMethod": row["payment_method"],
         "placedAt": row["placed_at"].isoformat(),
         "customerName": row["customer_name"],
-        "specialInstructions": row["special_instructions"],
+        "specialInstructions": kitchen_note(row["cooking_instructions"], row["no_cutlery"], row["special_instructions"]),
     }
 
 
@@ -179,7 +203,8 @@ async def list_orders(restaurant_id: Any, queue: Optional[str] = None, limit: in
     rows = await fetch(
         """
         select o.id, o.order_number, o.status, o.total_paise, o.payment_method,
-               o.placed_at, o.special_instructions,
+               o.placed_at, o.special_instructions, o.cooking_instructions, o.no_cutlery,
+               o.is_test, o.accepted_at, o.prep_minutes,
                u.full_name as customer_name,
                (select coalesce(sum(i.quantity), 0)::int from order_items i where i.order_id = o.id)
                  as item_count
@@ -210,7 +235,9 @@ async def get_order(restaurant_id: Any, order_id: str) -> dict:
                o.delivery_fee_paise, o.packaging_fee_paise, o.tax_paise, o.discount_paise,
                o.tip_paise, o.round_off_paise,
                o.total_paise, o.payment_method, o.payment_status, o.placed_at,
-               o.special_instructions, o.delivery_address, o.cancellation_reason,
+               o.special_instructions, o.cooking_instructions, o.no_cutlery, o.delivery_address, o.cancellation_reason,
+               o.is_test, o.accepted_at, o.prep_minutes, o.prep_extensions,
+               (select r.avg_prep_minutes from restaurants r where r.id = o.restaurant_id) as usual_prep_minutes,
                u.full_name as customer_name, u.phone as customer_phone
         from orders o
         join users u on u.id = o.customer_id
@@ -255,6 +282,13 @@ async def get_order(restaurant_id: Any, order_id: str) -> dict:
         "id": str(order["id"]),
         "orderNumber": order["order_number"],
         "status": order["status"],
+        "isTest": order["is_test"],
+        # The prep time the kitchen chose, when that runs out, and how many
+        # more "Need more time?" asks are left.
+        "prepMinutes": order["prep_minutes"],
+        "usualPrepMinutes": order["usual_prep_minutes"],
+        "readyBy": _ready_by(order),
+        "moreTimeLeft": MAX_PREP_EXTENSIONS - order["prep_extensions"] if order["status"] == "preparing" else 0,
         "customer": {"name": order["customer_name"], "phone": order["customer_phone"]},
         "items": [
             {
@@ -281,7 +315,9 @@ async def get_order(restaurant_id: Any, order_id: str) -> dict:
         "paymentMethod": order["payment_method"],
         "paymentStatus": order["payment_status"],
         "placedAt": order["placed_at"].isoformat(),
-        "specialInstructions": order["special_instructions"],
+        "specialInstructions": kitchen_note(
+            order["cooking_instructions"], order["no_cutlery"], order["special_instructions"]
+        ),
         "cancellationReason": order["cancellation_reason"],
         "refund": await refunds.refund_for_order(identifier),
         "delivery": await delivery.tracking_for_order(identifier),
@@ -363,9 +399,24 @@ async def _move_order(
     return await get_order(restaurant_id, order_id)
 
 
-async def accept_order(restaurant_id: Any, order_id: str, user_id: uuid.UUID) -> dict:
+async def accept_order(
+    restaurant_id: Any, order_id: str, user_id: uuid.UUID, prep_minutes: Optional[int] = None
+) -> dict:
     await _move_order(
         restaurant_id, order_id, ACCEPTABLE_FROM, "preparing", user_id, "Accepted by restaurant"
+    )
+
+    # The time the kitchen chose; an older app sends none, so the usual applies.
+    await fetchrow(
+        """
+        update orders o
+        set accepted_at = now(), prep_minutes = coalesce($2, r.avg_prep_minutes)
+        from restaurants r
+        where o.id = $1 and r.id = o.restaurant_id
+        returning o.id
+        """,
+        uuid.UUID(order_id),
+        prep_minutes,
     )
 
     # Riders are sought as soon as cooking starts, not when the food is ready,
@@ -401,6 +452,72 @@ async def reject_order(
     return await get_order(restaurant_id, order_id)
 
 
+async def add_prep_time(restaurant_id: Any, order_id: str, minutes: int) -> dict:
+    """"Need more time?": pushes the ready time back by `minutes`, counted
+    from now if the kitchen is already running late. The customer is told."""
+    try:
+        identifier = uuid.UUID(order_id)
+    except (ValueError, TypeError):
+        raise not_found("order_not_found", "That order could not be found")
+
+    async with transaction() as connection:
+        order = await connection.fetchrow(
+            """
+            select o.restaurant_id, o.status, o.prep_extensions,
+                   coalesce(o.prep_minutes, r.avg_prep_minutes) as prep_minutes,
+                   coalesce(
+                     o.accepted_at,
+                     (select min(h.created_at) from order_status_history h
+                       where h.order_id = o.id and h.status = 'preparing'),
+                     now()
+                   ) as accepted_at,
+                   now() as now
+            from orders o
+            join restaurants r on r.id = o.restaurant_id
+            where o.id = $1
+            for update of o
+            """,
+            identifier,
+        )
+
+        if order is None or order["restaurant_id"] != restaurant_id:
+            raise not_found("order_not_found", "That order could not be found")
+
+        if order["status"] != "preparing":
+            raise conflict("order_not_preparing", "More time can only be added while the order is being prepared")
+
+        if order["prep_extensions"] >= MAX_PREP_EXTENSIONS:
+            raise conflict(
+                "no_more_time",
+                f"More time has already been added {MAX_PREP_EXTENSIONS} times. Call the customer if it will be later still",
+            )
+
+        planned = order["accepted_at"] + datetime.timedelta(minutes=order["prep_minutes"])
+        ready_by = max(planned, order["now"]) + datetime.timedelta(minutes=minutes)
+        prep = math.ceil((ready_by - order["accepted_at"]).total_seconds() / 60)
+
+        if prep > MAX_PREP_MINUTES:
+            raise conflict(
+                "prep_too_long",
+                "An order cannot take more than 2 hours from acceptance. Call the customer if it will",
+            )
+
+        await connection.execute(
+            """
+            update orders
+            set accepted_at = $2, prep_minutes = $3, prep_extensions = prep_extensions + 1
+            where id = $1
+            """,
+            identifier,
+            order["accepted_at"],
+            prep,
+        )
+
+    await events.prep_delayed(identifier, minutes)
+
+    return await get_order(restaurant_id, order_id)
+
+
 async def mark_ready(restaurant_id: Any, order_id: str, user_id: uuid.UUID) -> dict:
     order = await _move_order(
         restaurant_id, order_id, {"preparing"}, "ready", user_id, "Ready for pickup"
@@ -415,7 +532,7 @@ async def mark_ready(restaurant_id: Any, order_id: str, user_id: uuid.UUID) -> d
 RESTAURANT_COLUMNS = """
     id, name, description, cuisines, address_line, city, phone, image_url,
     is_veg, rating, rating_count, status, is_accepting_orders,
-    avg_prep_minutes, commission_pct, opens_at, closes_at
+    avg_prep_minutes, commission_pct, opens_at, closes_at, latitude, longitude
 """
 
 

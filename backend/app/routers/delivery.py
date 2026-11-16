@@ -41,7 +41,7 @@ async def set_online(body: OnlineBody, user: CurrentUser = Depends(rider_only)):
 
 @router.post("/location")
 async def update_location(body: LocationBody, user: CurrentUser = Depends(rider_only)):
-    await service.update_location(user.id, body.latitude, body.longitude)
+    await service.update_location(user.id, body.latitude, body.longitude, body.mocked)
 
     return {"ok": True}
 
@@ -97,6 +97,7 @@ async def _step(delivery_id: str, action: str, body: Optional[StepBody], user: C
             longitude=body.longitude,
             accuracy=body.accuracy,
             code=body.code,
+            mocked=body.mocked,
         ),
     }
 

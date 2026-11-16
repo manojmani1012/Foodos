@@ -300,3 +300,28 @@ class RecordPayoutBody(BaseModel):
             raise ValueError("The period ends before it starts")
 
         return self
+
+
+class CashDepositBody(BaseModel):
+    amountPaise: int = Field(ge=100, le=10_000_000)
+    # UPI reference, receipt number, or who took the cash.
+    reference: Optional[str] = Field(default=None, max_length=80)
+
+    @field_validator("reference")
+    @classmethod
+    def _tidy(cls, value: Optional[str]) -> Optional[str]:
+        return (value or "").strip() or None
+
+
+class CreateTargetBody(BaseModel):
+    """A daily target: "Complete 15 trips, earn ₹250 extra". It runs every day
+    until it is stopped."""
+
+    targetTrips: int = Field(ge=1, le=60)
+    bonusPaise: int = Field(ge=100, le=1_000_000)
+    name: Optional[str] = Field(default=None, max_length=60)
+
+    @field_validator("name")
+    @classmethod
+    def _tidy(cls, value: Optional[str]) -> Optional[str]:
+        return (value or "").strip() or None

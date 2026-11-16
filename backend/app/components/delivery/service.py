@@ -19,6 +19,11 @@ is only delivered when the rider enters the customer's 4-digit code.
 
 A rider who signs up starts as `pending` and cannot take orders until an admin
 approves them. Only `active` riders can go online.
+
+A position from a fake GPS app is refused (test accounts excepted) and counted
+for the admin panel. Daily targets (targets.py) pay their bonus on the trip
+that reaches them, and a rider holding too much cash gets only prepaid orders
+until they hand it over (cash.py).
 """
 
 import uuid
@@ -30,7 +35,8 @@ from ...errors import AppError, bad_request, conflict, forbidden, not_found
 from ..geo import distance_km
 from ..notifications import events
 from ..orders.delivery_code import LOCK_SECONDS, MAX_ATTEMPTS, code_required
-from . import dispatch
+from ..orders.notes import rider_note
+from . import cash, dispatch, targets
 from .dispatch import ACTIVE, as_address as _address, rider_pay, trip
 
 # Each rider action: which delivery statuses it may follow, the status it sets,
@@ -51,6 +57,14 @@ AT_PLACE = {"reached": "pickup location", "arrived": "customer's location"}
 
 # A position older than this is not proof of where the rider is now.
 STEP_LOCATION_FRESH_SECONDS = 120
+
+# A fake GPS app in use is counted once per this long, not on every update.
+MOCK_LOCATION_INCIDENT_MINUTES = 10
+
+MOCK_LOCATION_MESSAGE = (
+    "Fake GPS is on. Turn off any fake location app, and mock location in Developer options, "
+    "to take Foodos orders"
+)
 
 # Phone GPS can be off by tens of metres indoors. Up to this much of the
 # reported accuracy is given the rider the benefit of the doubt.
@@ -118,6 +132,12 @@ async def _partner(user_id: uuid.UUID) -> Any:
         """
         select p.user_id, p.vehicle_type, p.vehicle_number, p.city, p.status, p.is_online,
                p.current_latitude, p.current_longitude, p.last_location_at, p.rating, p.rating_count,
+               -- Fake GPS seen lately and more recent than any real position: still on.
+               coalesce(
+                 p.mock_location_at > coalesce(p.last_location_at, '-infinity')
+                   and p.mock_location_at > now() - make_interval(mins => 10),
+                 false
+               ) as fake_gps,
                u.full_name, u.phone
         from delivery_partners p
         join users u on u.id = p.user_id
@@ -143,6 +163,7 @@ def _partner_to_dict(row: Any) -> dict:
         "city": row["city"],
         "rating": float(row["rating"]),
         "ratingCount": row["rating_count"],
+        "fakeGps": row["fake_gps"],
     }
 
 
@@ -162,6 +183,10 @@ async def profile(user_id: uuid.UUID) -> dict:
     return {
         **_partner_to_dict(partner),
         "today": {"deliveries": today["deliveries"], "earningsPaise": today["earnings"]},
+        # "Complete 15 trips, earn ₹250 extra", with today's progress.
+        "targets": await targets.today(user_id),
+        # Cash from cash orders still in the rider's pocket, and the limit.
+        "cash": await cash.summary(user_id),
     }
 
 
@@ -204,7 +229,32 @@ async def set_online(user_id: uuid.UUID, online: bool) -> dict:
     return await profile(user_id)
 
 
-async def update_location(user_id: uuid.UUID, latitude: float, longitude: float) -> None:
+async def _flag_mock_location(user_id: uuid.UUID) -> bool:
+    """Records fake GPS on this rider's phone. False for test accounts, which
+    may use it: they are run from a desk, far from any pin."""
+    flagged = await fetchval(
+        """
+        update delivery_partners p
+        set mock_location_count = p.mock_location_count
+              + case when p.mock_location_at is null
+                       or p.mock_location_at < now() - make_interval(mins => $2) then 1 else 0 end,
+            mock_location_at = now()
+        from users u
+        where u.id = p.user_id and p.user_id = $1 and not u.is_test
+        returning 1
+        """,
+        user_id,
+        MOCK_LOCATION_INCIDENT_MINUTES,
+    )
+
+    return bool(flagged)
+
+
+async def update_location(user_id: uuid.UUID, latitude: float, longitude: float, mocked: bool = False) -> None:
+    # A fake position is never stored: dispatch would offer orders by it.
+    if mocked and await _flag_mock_location(user_id):
+        raise AppError(409, "mock_location", MOCK_LOCATION_MESSAGE)
+
     await fetchval(
         """
         update delivery_partners
@@ -550,6 +600,7 @@ async def advance(
     longitude: Optional[float] = None,
     accuracy: Optional[float] = None,
     code: Optional[str] = None,
+    mocked: bool = False,
 ) -> dict:
     if action not in ACTIONS:
         raise not_found("action_not_found", "Unknown delivery step")
@@ -559,7 +610,7 @@ async def advance(
 
     # The position the app sent with the step is the freshest there is: keep it.
     if latitude is not None and longitude is not None:
-        await update_location(user_id, latitude, longitude)
+        await update_location(user_id, latitude, longitude, mocked)
 
     if action == "delivered":
         await _check_code(user_id, identifier, code)
@@ -624,6 +675,9 @@ async def advance(
             f"update deliveries set status = $2, {stamp} = now() where id = $1", identifier, to_status
         )
 
+        # The trip that reaches a daily target carries its bonus.
+        bonuses = await targets.award(connection, user_id, identifier) if to_status == "delivered" else []
+
         if order_status:
             order_stamp = {"picked_up": "picked_up_at", "delivered": "delivered_at"}.get(order_status)
             stamp_sql = f", {order_stamp} = now()" if order_stamp else ""
@@ -650,7 +704,7 @@ async def advance(
     await STEP_EVENTS[action](delivery["order_id"])
 
     if to_status == "delivered":
-        return {"delivered": True, "delivery": await _delivery_detail(identifier)}
+        return {"delivered": True, "delivery": await _delivery_detail(identifier), "targetsReached": bonuses}
 
     return await active(user_id)
 
@@ -678,7 +732,7 @@ async def _delivery_detail(identifier: uuid.UUID) -> dict:
                d.base_earning_paise, d.incentive_paise, d.tip_paise,
                d.accepted_at, d.picked_up_at, d.delivered_at,
                o.id as order_id, o.order_number, o.status as order_status, o.payment_method,
-               o.payment_status, o.total_paise, o.delivery_address, o.special_instructions,
+               o.payment_status, o.total_paise, o.delivery_address, o.special_instructions, o.delivery_preferences,
                o.delivery_code is not null as has_code, o.is_test,
                r.name as restaurant_name, r.address_line as restaurant_address, r.city as restaurant_city,
                r.phone as restaurant_phone, r.latitude as restaurant_lat, r.longitude as restaurant_lng,
@@ -721,7 +775,8 @@ async def _delivery_detail(identifier: uuid.UUID) -> dict:
             "landmark": address.get("landmark"),
             "latitude": address.get("latitude"),
             "longitude": address.get("longitude"),
-            "instructions": row["special_instructions"],
+            # Leave at the door, do not ring the bell, and the like.
+            "instructions": rider_note(row["delivery_preferences"], row["special_instructions"]),
         },
         "items": [{"name": item["name"], "quantity": item["quantity"]} for item in items],
         "paymentMethod": row["payment_method"],
@@ -767,7 +822,7 @@ async def earnings(user_id: uuid.UUID, days: int) -> dict:
         days,
     )
 
-    cash = await fetchval(
+    cash_today = await fetchval(
         """
         select coalesce(sum(o.total_paise), 0)::int
         from deliveries d join orders o on o.id = d.order_id
@@ -805,7 +860,9 @@ async def earnings(user_id: uuid.UUID, days: int) -> dict:
         },
         "daily": daily,
         # Cash taken from customers today, which the rider owes Foodos.
-        "cashCollectedTodayPaise": cash,
+        "cashCollectedTodayPaise": cash_today,
+        # All cash not yet handed over or settled, and the limit on it.
+        "cash": await cash.summary(user_id),
     }
 
 

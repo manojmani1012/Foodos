@@ -109,13 +109,18 @@ export default function EarningsScreen() {
             </View>
           ) : null}
 
-          {earnings && earnings.cashCollectedTodayPaise > 0 ? (
+          {earnings && earnings.cash.inHandPaise > 0 ? (
             <View style={styles.cash}>
-              <Text style={styles.cashTitle}>Cash in hand today</Text>
-              <Text style={styles.cashValue}>{formatRupees(earnings.cashCollectedTodayPaise)}</Text>
+              <Text style={styles.cashTitle}>Cash in hand</Text>
+              <Text style={styles.cashValue}>{formatRupees(earnings.cash.inHandPaise)}</Text>
               <Text style={styles.cashHint}>
-                Collected from customers on cash orders. This belongs to Foodos and is settled with
-                you separately.
+                Collected from customers on cash orders and not yet handed over. This belongs to Foodos:
+                hand it over, or it is taken off your next payout.
+                {earnings.cash.limitPaise
+                  ? earnings.cash.limitReached
+                    ? ` You have reached the ${formatRupees(earnings.cash.limitPaise)} limit, so you get only prepaid orders until you hand it over.`
+                    : ` At ${formatRupees(earnings.cash.limitPaise)} you get only prepaid orders until you hand it over.`
+                  : ''}
               </Text>
             </View>
           ) : null}

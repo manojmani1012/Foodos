@@ -176,7 +176,21 @@ export default function TodayScreen() {
   }
 
   const live = restaurant?.status === 'active'
-  const notice = restaurant && !live ? STATUS_NOTICE[restaurant.status] : null
+  // Live, but still hidden from customers: say why, so nobody waits for
+  // orders that cannot come.
+  const hidden =
+    live && restaurant && !restaurant.onMap
+      ? {
+          title: 'Not on the map yet',
+          body: 'Customers cannot see your restaurant until Foodos places it on the map. Contact Foodos support to get it pinned.',
+        }
+      : live && counters && counters.menuItems > 0 && counters.unavailableItems >= counters.menuItems
+        ? {
+            title: 'No dishes available',
+            body: 'Every dish is marked unavailable, so customers have nothing to order. Turn dishes back on under Menu.',
+          }
+        : null
+  const notice = restaurant && !live ? STATUS_NOTICE[restaurant.status] : hidden
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
@@ -206,7 +220,9 @@ export default function TodayScreen() {
             <Text style={styles.statusHint}>
               {!live
                 ? 'Customers cannot see you until Foodos makes you live'
-                : restaurant?.isAcceptingOrders
+                : !restaurant?.onMap
+                  ? 'Hidden from customers: not on the map yet'
+                  : restaurant?.isAcceptingOrders
                   ? 'Customers can order from you now'
                   : 'You are hidden from customers'}
             </Text>

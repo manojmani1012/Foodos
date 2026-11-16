@@ -124,6 +124,15 @@ class Settings(BaseSettings):
     # only within this distance of the pin.
     geofence_metres: int = Field(default=100, ge=20)
 
+    # "High demand" on a restaurant: this many orders waiting in its kitchen
+    # (new or cooking). Its delivery time is shown that many minutes longer.
+    high_demand_open_orders: int = Field(default=5, ge=1)
+    high_demand_extra_minutes: int = Field(default=10, ge=0)
+
+    # A rider holding this much cash from cash-on-delivery orders gets only
+    # prepaid orders until they hand it over to Foodos. 0 turns the limit off.
+    rider_cash_limit_paise: int = Field(default=200000, ge=0)
+
     # Which orders need the customer's 4-digit code before the rider can mark
     # them delivered.
     delivery_code_required: Literal["all", "prepaid", "off"] = "all"

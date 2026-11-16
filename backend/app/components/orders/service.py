@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from ...database import fetch, fetchrow, transaction
+from ...database import fetch, fetchrow, fetchval, transaction
 from ...errors import AppError, bad_request, conflict, forbidden, not_found
 from ..delivery import service as delivery
 from ..geo import distance_km, ride_minutes
@@ -157,9 +157,13 @@ async def _order_response(order_id: uuid.UUID) -> dict:
                o.discount_paise, o.round_off_paise, o.total_paise, o.payment_method, o.payment_status,
                o.delivery_address, o.special_instructions, o.estimated_delivery_at,
                o.placed_at, o.delivered_at, o.cancelled_at, o.cancellation_reason, o.delivery_code,
+               o.cooking_instructions, o.no_cutlery, o.delivery_preferences,
+               (select row(d.rider_rating, d.rider_rating_comment) from deliveries d
+                 where d.order_id = o.id and d.rider_rating is not null) as rider_review,
                r.name as restaurant_name, r.address_line as restaurant_address,
                r.city as restaurant_city, r.phone as restaurant_phone,
-               r.latitude as restaurant_lat, r.longitude as restaurant_lng, r.avg_prep_minutes
+               r.latitude as restaurant_lat, r.longitude as restaurant_lng,
+               coalesce(o.prep_minutes, r.avg_prep_minutes) as prep_minutes, o.accepted_at
         from orders o
         join restaurants r on r.id = o.restaurant_id
         where o.id = $1
@@ -203,7 +207,9 @@ async def _order_response(order_id: uuid.UUID) -> dict:
     address = order["delivery_address"]
     address = json.loads(address) if isinstance(address, str) else address
     tracking = await delivery.tracking_for_order(order_id)
-    accepted_at = next((row["created_at"] for row in history if row["status"] == "preparing"), None)
+    accepted_at = order["accepted_at"] or next(
+        (row["created_at"] for row in history if row["status"] == "preparing"), None
+    )
     now = datetime.now(timezone.utc)
     live = order["status"] in LIVE
     india_hour = now.astimezone(INDIA).hour
@@ -246,13 +252,20 @@ async def _order_response(order_id: uuid.UUID) -> dict:
         "paymentMethod": order["payment_method"],
         "paymentStatus": order["payment_status"],
         "specialInstructions": order["special_instructions"],
+        "cookingInstructions": order["cooking_instructions"],
+        "noCutlery": order["no_cutlery"],
+        "deliveryPreferences": list(order["delivery_preferences"] or []),
+        # The customer's rating of the delivery, once given.
+        "riderReview": {"rating": order["rider_review"][0], "comment": order["rider_review"][1]}
+        if order["rider_review"]
+        else None,
         "estimatedDeliveryAt": order["estimated_delivery_at"].isoformat()
         if order["estimated_delivery_at"]
         else None,
         # "Arriving in X mins", recalculated on every read; 0 = at the door.
         "etaMinutes": _eta_minutes(
             order["status"],
-            order["avg_prep_minutes"],
+            order["prep_minutes"],
             accepted_at,
             _point(order["restaurant_lat"], order["restaurant_lng"]),
             _point(address.get("latitude"), address.get("longitude")),
@@ -291,6 +304,9 @@ async def place_order(
     special_instructions: Optional[str] = None,
     tip_paise: int = 0,
     idempotency_key: Optional[str] = None,
+    cooking_instructions: Optional[str] = None,
+    no_cutlery: bool = False,
+    delivery_preferences: Optional[list[str]] = None,
 ) -> dict:
     # A retry of the same checkout returns the original order rather than
     # placing a second one.
@@ -346,10 +362,11 @@ async def place_order(
                delivery_fee_paise, packaging_fee_paise, tax_paise, tip_paise,
                discount_paise, total_paise, offer_id, payment_method, payment_status,
                special_instructions, estimated_delivery_at, confirmed_at, idempotency_key,
-               round_off_paise, delivery_code, is_test)
+               round_off_paise, delivery_code, is_test,
+               cooking_instructions, no_cutlery, delivery_preferences)
             values ($1, $2, $3::jsonb, $16, $4, $5, $6, $7, $8, $9, $10, $11,
                     $12, 'pending', $13, $14, $17, $15, $18, $19,
-                    (select is_test from users where id = $1))
+                    (select is_test from users where id = $1), $20, $21, $22::text[])
             returning id
             """,
             user_id,
@@ -371,6 +388,9 @@ async def place_order(
             datetime.now(timezone.utc) if is_cash else None,
             quote.round_off_paise,
             new_code(),
+            (cooking_instructions or "").strip() or None,
+            no_cutlery,
+            list(dict.fromkeys(delivery_preferences or [])),
         )
 
         for line in quote.lines:
@@ -473,6 +493,78 @@ async def list_orders(user_id: uuid.UUID, limit: int = 20, offset: int = 0) -> d
         "limit": limit,
         "offset": offset,
     }
+
+
+async def active_order(user_id: uuid.UUID) -> Optional[dict]:
+    """The customer's latest order still on its way, for the bar at the bottom
+    of the app; None when there is none."""
+    order_id = await fetchval(
+        """
+        select id from orders
+        where customer_id = $1 and status = any($2::text[])
+        order by placed_at desc
+        limit 1
+        """,
+        user_id,
+        list(LIVE),
+    )
+
+    return await _order_response(order_id) if order_id else None
+
+
+async def review_rider(user_id: uuid.UUID, order_id: str, rating: int, comment: Optional[str]) -> dict:
+    """The customer's rating of the delivery, once per order, after it arrived.
+    The rider's average is worked out again from all their ratings."""
+    try:
+        identifier = uuid.UUID(order_id)
+    except (ValueError, TypeError):
+        raise not_found("order_not_found", "That order could not be found")
+
+    comment = (comment or "").strip() or None
+
+    async with transaction() as connection:
+        row = await connection.fetchrow(
+            """
+            select o.customer_id, o.status, d.id as delivery_id, d.partner_id, d.rider_rating
+            from orders o left join deliveries d on d.order_id = o.id
+            where o.id = $1
+            for update of o
+            """,
+            identifier,
+        )
+
+        if row is None or row["customer_id"] != user_id:
+            raise not_found("order_not_found", "That order could not be found")
+
+        if row["status"] != "delivered" or row["partner_id"] is None:
+            raise conflict("rider_review_not_ready", "You can rate the delivery once it has reached you")
+
+        if row["rider_rating"] is not None:
+            raise conflict("rider_already_rated", "You have already rated this delivery")
+
+        await connection.execute(
+            """
+            update deliveries set rider_rating = $2, rider_rating_comment = $3, rider_rated_at = now()
+            where id = $1
+            """,
+            row["delivery_id"],
+            rating,
+            comment,
+        )
+        await connection.execute(
+            """
+            update delivery_partners p
+            set rating = coalesce(s.average, 0), rating_count = s.n
+            from (
+              select round(avg(rider_rating)::numeric, 2) as average, count(*)::int as n
+              from deliveries where partner_id = $1 and rider_rating is not null
+            ) s
+            where p.user_id = $1
+            """,
+            row["partner_id"],
+        )
+
+    return {"rating": rating, "comment": comment}
 
 
 async def get_order(user_id: uuid.UUID, order_id: str) -> dict:

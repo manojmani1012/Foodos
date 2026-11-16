@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react'
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
+import { ActiveOrderBar } from '@/components/ActiveOrderBar'
 import { useAuth } from '@/lib/AuthContext'
 import { removeFavourite, type Point, type Restaurant } from '@/lib/catalogue'
 import { request } from '@/lib/apiClient'
@@ -131,17 +132,21 @@ export default function FavouritesScreen() {
           )
         }
       />
+
+      <ActiveOrderBar style={styles.activeOrder} />
     </SafeAreaView>
   )
 }
 
 const styles = StyleSheet.create({
+  activeOrder: { position: 'absolute', left: space.lg, right: space.lg, bottom: space.lg },
   outOfRange: { ...type.caption, color: colors.warning, fontWeight: '600', marginTop: 2 },
   screen: { flex: 1, backgroundColor: colors.ground },
   flex: { flex: 1 },
   header: { paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.sm },
   headerTitle: { ...type.display, fontSize: 24, color: colors.ink },
-  list: { padding: space.lg, gap: space.md, flexGrow: 1 },
+  // Bottom room for the live order bar.
+  list: { padding: space.lg, paddingBottom: 96, gap: space.md, flexGrow: 1 },
 
   card: {
     flexDirection: 'row',

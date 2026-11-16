@@ -12,6 +12,8 @@ class OnlineBody(BaseModel):
 class LocationBody(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
+    # Android says when the position comes from a fake GPS app.
+    mocked: bool = False
 
 
 class PartnerProfileBody(BaseModel):
@@ -30,6 +32,8 @@ class StepBody(BaseModel):
     latitude: Optional[float] = Field(default=None, ge=-90, le=90)
     longitude: Optional[float] = Field(default=None, ge=-180, le=180)
     accuracy: Optional[float] = Field(default=None, ge=0, le=5000)
+    # The position came from a fake GPS app (Android tells the app so).
+    mocked: bool = False
     # "Delivered" only: cash orders confirm the money was taken at the door,
     # and the customer's 4-digit code proves the food reached them.
     cashCollected: bool = False

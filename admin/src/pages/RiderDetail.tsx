@@ -54,6 +54,71 @@ function actionsFor(rider: Rider): Action[] {
   }
 }
 
+function RecordDeposit({ rider, onSaved, onClose }: { rider: Rider; onSaved: (rider: Rider) => void; onClose: () => void }) {
+  const [amount, setAmount] = useState(String(rider.cash.inHandPaise / 100))
+  const [reference, setReference] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function save(event?: FormEvent) {
+    event?.preventDefault()
+    const paise = Math.round(Number(amount) * 100)
+
+    if (!(paise >= 100)) {
+      setError('Enter the amount handed over, in rupees')
+      return
+    }
+
+    setBusy(true)
+    setError('')
+
+    try {
+      const { rider: saved } = await api<{ rider: Rider }>(`/api/v1/admin/riders/${rider.id}/cash-deposits`, {
+        method: 'POST',
+        body: { amountPaise: paise, reference: reference.trim() || null },
+      })
+      onSaved(saved)
+      onClose()
+    } catch (caught: any) {
+      setError(caught?.message || 'Could not record the deposit')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      title="Record cash handed over"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" onClick={() => save()} disabled={busy}>
+            {busy ? 'Saving…' : 'Record'}
+          </button>
+        </>
+      }
+    >
+      <form className="stack" onSubmit={save}>
+        <p className="muted small">
+          {rider.name || 'This rider'} holds {formatMoney(rider.cash.inHandPaise)} from cash orders. Record only cash Foodos has
+          actually received. Their payout for today adds it back, so it is not taken off their pay twice.
+        </p>
+        <div className="form-grid two">
+          <Field label="Amount (₹)">
+            {(id) => <input id={id} className="input" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />}
+          </Field>
+          <Field label="Reference" hint="UPI reference, receipt number, or who took the cash.">
+            {(id) => <input id={id} className="input" value={reference} maxLength={80} onChange={(e) => setReference(e.target.value)} />}
+          </Field>
+        </div>
+        {error && <ErrorBox error={error} />}
+      </form>
+    </Modal>
+  )
+}
+
 function EditRider({ rider, onSaved, onClose }: { rider: Rider; onSaved: (rider: Rider) => void; onClose: () => void }) {
   const [form, setForm] = useState({
     fullName: rider.name || '',
@@ -144,6 +209,7 @@ export default function RiderDetail() {
   const toast = useToast()
   const [action, setAction] = useState<Action | null>(null)
   const [editing, setEditing] = useState(false)
+  const [depositing, setDepositing] = useState(false)
 
   const state = useLoad(async () => (await api<{ rider: Rider }>(`/api/v1/admin/riders/${id}`)).rider, id, 30_000)
 
@@ -204,15 +270,31 @@ export default function RiderDetail() {
             {rider.accountBlocked && (
               <div className="notice notice-danger">This phone number is blocked under Customers, so it cannot sign in to any Foodos app.</div>
             )}
+            {rider.fakeGps.count > 0 && (
+              <div className="notice notice-danger">
+                Fake GPS seen on this rider's phone {rider.fakeGps.count === 1 ? 'once' : `${rider.fakeGps.count} times`}, last{' '}
+                {timeAgo(rider.fakeGps.lastSeenAt)}. Foodos refused those positions; call them if it happens again.
+              </div>
+            )}
+            {rider.cash.limitReached && (
+              <div className="notice notice-warning">
+                Holding {formatMoney(rider.cash.inHandPaise)} in cash, over the {formatMoney(rider.cash.limitPaise, { whole: true })} limit:
+                they get only prepaid orders until the cash is handed over and recorded below.
+              </div>
+            )}
 
             <div className="stats">
               <Stat label="Deliveries" value={rider.stats.deliveries} hint={`${rider.stats.deliveriesLast7Days} in the last 7 days`} />
               <Stat label="Earned, last 7 days" value={formatMoney(rider.stats.earnedPaiseLast7Days, { whole: true })} hint={`${rider.stats.distanceKmLast7Days} km`} />
               <Stat
-                label="Cash held today"
-                value={formatMoney(rider.stats.cashHeldTodayPaise, { whole: true })}
-                hint="Collected at the door; owed to Foodos"
-                tone={rider.stats.cashHeldTodayPaise > 0 ? 'warning' : undefined}
+                label="Cash in hand"
+                value={formatMoney(rider.cash.inHandPaise)}
+                hint={
+                  rider.cash.limitPaise
+                    ? `Limit ${formatMoney(rider.cash.limitPaise, { whole: true })} · ${formatMoney(rider.stats.cashHeldTodayPaise, { whole: true })} collected today`
+                    : `${formatMoney(rider.stats.cashHeldTodayPaise, { whole: true })} collected today`
+                }
+                tone={rider.cash.inHandPaise > 0 ? 'warning' : undefined}
               />
               <Stat label="Rating" value={rider.ratingCount ? rider.rating.toFixed(1) : '—'} hint={rider.ratingCount ? `${rider.ratingCount} ratings` : 'No ratings yet'} />
             </div>
@@ -233,6 +315,35 @@ export default function RiderDetail() {
                 </Card>
 
                 <RiderDocuments rider={rider} onChange={state.setData} />
+
+                <Card
+                  title="Cash handed over"
+                  actions={
+                    rider.cash.inHandPaise > 0 && (
+                      <button className="btn btn-small" onClick={() => setDepositing(true)}>
+                        Record cash received
+                      </button>
+                    )
+                  }
+                >
+                  {rider.cash.deposits.length === 0 ? (
+                    <p className="muted">
+                      Nothing recorded yet. Cash not handed over is taken off the rider's payout instead.
+                    </p>
+                  ) : (
+                    <Details
+                      rows={rider.cash.deposits.map((deposit) => [
+                        formatDateTime(deposit.createdAt),
+                        <div key={deposit.id}>
+                          {formatMoney(deposit.amountPaise)}
+                          <div className="sub">
+                            {[deposit.reference, deposit.recordedBy && `by ${deposit.recordedBy}`].filter(Boolean).join(' · ')}
+                          </div>
+                        </div>,
+                      ])}
+                    />
+                  )}
+                </Card>
               </div>
 
               <Card title="Last known location">
@@ -240,8 +351,8 @@ export default function RiderDetail() {
                   <>
                     <MapPicker value={rider.location} readOnly height={240} />
                     <p className="muted small">
-                      Updated {timeAgo(rider.location.updatedAt)}. Shared only while the Delivery app is open and the rider is online
-                      or on a delivery.
+                      Updated {timeAgo(rider.location.updatedAt)}. Shared while the rider is online or on a delivery, also with the
+                      screen off.
                     </p>
                   </>
                 ) : (
@@ -297,6 +408,17 @@ export default function RiderDetail() {
                 </div>
               )}
             </Card>
+
+            {depositing && (
+              <RecordDeposit
+                rider={rider}
+                onSaved={(saved) => {
+                  state.setData(saved)
+                  toast('Cash deposit recorded')
+                }}
+                onClose={() => setDepositing(false)}
+              />
+            )}
 
             {editing && <EditRider rider={rider} onSaved={(saved) => { state.setData(saved); toast('Rider details saved') }} onClose={() => setEditing(false)} />}
 

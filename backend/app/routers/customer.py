@@ -4,7 +4,7 @@ Browsing is open to anyone so the app is useful before signing in. Favourites
 belong to a person, so they require a customer session.
 """
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
 
@@ -22,6 +22,7 @@ from ..components.orders.schemas import (
     PlaceOrderBody,
     QuoteBody,
     ReviewOrderBody,
+    RiderReviewBody,
     UpdateProfileBody,
 )
 from ..errors import not_found
@@ -49,6 +50,9 @@ async def list_restaurants(
     offset: int = Query(default=0, ge=0),
     latitude: Optional[float] = Latitude,
     longitude: Optional[float] = Longitude,
+    sort: Optional[Literal["rating", "delivery_time", "distance"]] = Query(default=None),
+    minRating: Optional[float] = Query(default=None, ge=0, le=5),
+    fastDelivery: bool = Query(default=False, description="Cooking plus the ride within 30 minutes"),
     user: Optional[CurrentUser] = Depends(optional_authenticate),
 ):
     result = await service.list_restaurants(
@@ -61,9 +65,22 @@ async def list_restaurants(
         user_id=user.id if user else None,
         latitude=latitude,
         longitude=longitude,
+        sort=sort,
+        min_rating=minRating,
+        fast_only=fastDelivery,
     )
 
     return RestaurantList(**result)
+
+
+@router.get("/popular-dishes")
+async def popular_dishes(
+    latitude: Optional[float] = Latitude,
+    longitude: Optional[float] = Longitude,
+    user: Optional[CurrentUser] = Depends(optional_authenticate),
+):
+    """What people near the pin order most, for the search suggestions."""
+    return {"ok": True, "dishes": await service.popular_dishes(latitude, longitude, user.id if user else None)}
 
 
 @router.get("/cuisines")
@@ -190,6 +207,9 @@ async def place_order(body: PlaceOrderBody, user: CurrentUser = Depends(customer
         special_instructions=body.specialInstructions,
         tip_paise=body.tipPaise,
         idempotency_key=body.idempotencyKey,
+        cooking_instructions=body.cookingInstructions,
+        no_cutlery=body.noCutlery,
+        delivery_preferences=body.deliveryPreferences,
     )
 
     return {"ok": True, "order": order}
@@ -202,6 +222,18 @@ async def list_orders(
     user: CurrentUser = Depends(customer_only),
 ):
     return {"ok": True, **await order_service.list_orders(user.id, limit, offset)}
+
+
+# Declared before /orders/{order_id}, so "active" is not taken for an order id.
+@router.get("/orders/active")
+async def active_order(user: CurrentUser = Depends(customer_only)):
+    """The order still on its way, for the bar at the bottom of the app."""
+    return {"ok": True, "order": await order_service.active_order(user.id)}
+
+
+@router.post("/orders/{order_id}/rider-review")
+async def review_rider(order_id: str, body: RiderReviewBody, user: CurrentUser = Depends(customer_only)):
+    return {"ok": True, "riderReview": await order_service.review_rider(user.id, order_id, body.rating, body.comment)}
 
 
 @router.get("/orders/{order_id}")

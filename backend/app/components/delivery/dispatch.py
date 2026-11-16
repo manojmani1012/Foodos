@@ -9,7 +9,9 @@ A rider is offered work only when they are approved, online, free (no
 delivery in hand, no other offer on screen) and their position is recent: a
 rider who closed the app an hour ago is not nearby, whatever their last pin
 says. A rider who skipped this order is not asked again; one who let it run
-out may be asked again after a short pause, if they are still the nearest.
+out may be asked again after a short pause, if they are still the nearest. A
+rider holding as much cash as the limit allows is offered only prepaid orders
+(see cash.py).
 
 Each offer is decided with the delivery and the chosen rider locked, so two
 deliveries can never be offered to the same rider at once, and the background
@@ -28,6 +30,7 @@ from ...config import get_settings
 from ...database import fetch, transaction
 from ..geo import distance_km, sql_distance_km
 from ..notifications import events
+from . import cash
 
 logger = logging.getLogger("foodos.dispatch")
 
@@ -75,7 +78,7 @@ async def offer_next(delivery_id: uuid.UUID) -> Optional[uuid.UUID]:
         delivery = await connection.fetchrow(
             """
             select d.id, d.status, d.order_id, o.status as order_status, o.tip_paise, o.delivery_address, o.is_test,
-                   r.latitude, r.longitude,
+                   o.payment_method, o.payment_status, r.latitude, r.longitude,
                    extract(epoch from now() - d.created_at) / 60 as minutes_open
             from deliveries d
             join orders o on o.id = d.order_id
@@ -122,6 +125,7 @@ async def offer_next(delivery_id: uuid.UUID) -> Optional[uuid.UUID]:
               and p.current_latitude is not null and p.current_longitude is not null
               and p.last_location_at > now() - make_interval(secs => $4)
               and ($8 or {distance} <= $5)
+              and ($9 or {cash.in_hand_sql("p.user_id")} < $10)
               and not exists (
                 select 1 from deliveries x where x.partner_id = p.user_id and x.status = any($6::text[])
               )
@@ -148,6 +152,8 @@ async def offer_next(delivery_id: uuid.UUID) -> Optional[uuid.UUID]:
             list(ACTIVE),
             EXPIRED_PAUSE_SECONDS,
             delivery["is_test"],
+            cash.skip_limit(delivery["payment_method"], delivery["payment_status"]),
+            settings.rider_cash_limit_paise,
         )
 
         if rider is None:

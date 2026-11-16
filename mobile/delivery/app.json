@@ -60,7 +60,8 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Foodos Delivery uses your location while the app is open to show how far each pickup is and to let customers follow their order."
+          "locationWhenInUsePermission": "Foodos Delivery uses your location while you are online to show how far each pickup is and to let customers follow their order.",
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
       [

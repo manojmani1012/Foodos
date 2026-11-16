@@ -14,9 +14,11 @@ from ..components.restaurants import menu as menu_service
 from ..components.restaurants import portal
 from ..components.restaurants.portal_schemas import (
     AcceptingOrdersBody,
+    AcceptOrderBody,
     AddonsBody,
     CategoryBody,
     CreateItemBody,
+    MorePrepTimeBody,
     OutletProfileBody,
     RejectOrderBody,
     UpdateItemBody,
@@ -70,12 +72,19 @@ async def get_order(order_id: str, restaurant: Any = Depends(owned_restaurant)):
 @router.post("/orders/{order_id}/accept")
 async def accept_order(
     order_id: str,
+    body: Optional[AcceptOrderBody] = None,
     user: CurrentUser = Depends(owner_only),
     restaurant: Any = Depends(owned_restaurant),
 ):
-    order = await portal.accept_order(restaurant["id"], order_id, user.id)
+    prep_minutes = body.prepMinutes if body else None
+    order = await portal.accept_order(restaurant["id"], order_id, user.id, prep_minutes)
 
     return {"ok": True, "order": order}
+
+
+@router.post("/orders/{order_id}/more-time")
+async def more_prep_time(order_id: str, body: MorePrepTimeBody, restaurant: Any = Depends(owned_restaurant)):
+    return {"ok": True, "order": await portal.add_prep_time(restaurant["id"], order_id, body.minutes)}
 
 
 @router.post("/orders/{order_id}/reject")

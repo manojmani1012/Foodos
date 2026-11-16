@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
+  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -14,6 +15,7 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
+import { ActiveOrderBar } from '@/components/ActiveOrderBar'
 import { useAuth } from '@/lib/AuthContext'
 import { useCart } from '@/lib/CartContext'
 import { useLocation } from '@/lib/LocationContext'
@@ -21,14 +23,25 @@ import {
   addFavourite,
   fetchCuisines,
   fetchOffers,
+  fetchPopularDishes,
   fetchRestaurants,
   removeFavourite,
+  type OfferCard,
   type Restaurant,
+  type RestaurantSort,
 } from '@/lib/catalogue'
+import { loadRecentSearches, rememberSearch } from '@/lib/recentSearches'
 import { colors, radius, shadow, space, type } from '@/theme'
 
 const CHIP_ROW_HEIGHT = 48
 const ALL = '__all__'
+
+const SORTS: { id: RestaurantSort; label: string }[] = [
+  { id: 'relevance', label: 'Relevance' },
+  { id: 'rating', label: 'Rating: high to low' },
+  { id: 'delivery_time', label: 'Delivery time: fastest first' },
+  { id: 'distance', label: 'Distance: nearest first' },
+]
 
 export default function HomeScreen() {
   const { status, isSignedIn, user } = useAuth()
@@ -40,9 +53,23 @@ export default function HomeScreen() {
   const [settledSearch, setSettledSearch] = useState('')
   const [cuisine, setCuisine] = useState<string | null>(null)
 
+  // Sort and filters, like the row under the cuisines on Swiggy and Zomato.
+  const [sort, setSort] = useState<RestaurantSort>('relevance')
+  const [sorting, setSorting] = useState(false)
+  const [vegOnly, setVegOnly] = useState(false)
+  const [topRated, setTopRated] = useState(false)
+  const [fastDelivery, setFastDelivery] = useState(false)
+
   const [restaurants, setRestaurants] = useState<Restaurant[]>([])
   const [cuisines, setCuisines] = useState<{ id: string; label: string; emoji: string }[]>([])
-  const [offers, setOffers] = useState<any[]>([])
+  const [offers, setOffers] = useState<OfferCard[]>([])
+  const [fewRiders, setFewRiders] = useState(false)
+
+  // Suggestions under an empty search box: this phone's recent searches and
+  // what people nearby order most.
+  const [searchFocused, setSearchFocused] = useState(false)
+  const [recent, setRecent] = useState<string[]>([])
+  const [popular, setPopular] = useState<string[]>([])
 
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -55,6 +82,16 @@ export default function HomeScreen() {
 
     return () => clearTimeout(timer)
   }, [search])
+
+  useEffect(() => {
+    loadRecentSearches().then(setRecent)
+  }, [])
+
+  function searchFor(term: string) {
+    setSearch(term)
+    setSettledSearch(term)
+    rememberSearch(term).then(setRecent)
+  }
 
   // Restaurants are listed for the chosen address's pin, so only those that
   // deliver there show up, like Swiggy and Zomato. Without a pinned address
@@ -74,22 +111,34 @@ export default function HomeScreen() {
     }
 
     try {
-      const [list, cuisineList, offerList] = await Promise.all([
-        fetchRestaurants({ search: settledSearch, cuisine: cuisine ?? undefined, point }),
+      const [list, cuisineList, offerList, popularList] = await Promise.all([
+        fetchRestaurants({
+          search: settledSearch,
+          cuisine: cuisine ?? undefined,
+          point,
+          sort,
+          vegOnly,
+          minRating: topRated ? 4 : undefined,
+          fastDelivery,
+        }),
         fetchCuisines(point),
         fetchOffers(),
+        // Suggestions are a nicety: the list still loads without them.
+        fetchPopularDishes(point).catch(() => [] as string[]),
       ])
 
       setRestaurants(list.restaurants)
+      setFewRiders(list.fewRiders)
       setCuisines(cuisineList)
       setOffers(offerList)
+      setPopular(popularList)
     } catch (loadError: any) {
       setError(loadError.message || 'Could not load restaurants')
     } finally {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [settledSearch, cuisine, point?.latitude, point?.longitude])
+  }, [settledSearch, cuisine, sort, vegOnly, topRated, fastDelivery, point?.latitude, point?.longitude])
 
   useEffect(() => {
     if (isSignedIn) {
@@ -129,6 +178,17 @@ export default function HomeScreen() {
   }
 
   const initials = (user?.fullName || user?.phone || 'U').slice(-2)
+  const filtering = vegOnly || topRated || fastDelivery || sort !== 'relevance'
+  const showSuggestions = searchFocused && !search && (recent.length > 0 || popular.length > 0)
+
+  function clearFilters() {
+    setSearch('')
+    setCuisine(null)
+    setSort('relevance')
+    setVegOnly(false)
+    setTopRated(false)
+    setFastDelivery(false)
+  }
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
@@ -136,6 +196,8 @@ export default function HomeScreen() {
         data={restaurants}
         keyExtractor={item => item.id}
         showsVerticalScrollIndicator={false}
+        // Taps on the suggestion chips land before the keyboard closes.
+        keyboardShouldPersistTaps="handled"
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -181,6 +243,10 @@ export default function HomeScreen() {
                 placeholderTextColor={colors.faint}
                 value={search}
                 onChangeText={setSearch}
+                onFocus={() => setSearchFocused(true)}
+                // A moment's delay, so tapping a suggestion still counts.
+                onBlur={() => setTimeout(() => setSearchFocused(false), 150)}
+                onSubmitEditing={() => searchFor(search)}
                 returnKeyType="search"
                 autoCorrect={false}
                 autoCapitalize="none"
@@ -191,6 +257,46 @@ export default function HomeScreen() {
                 </Pressable>
               )}
             </View>
+
+            {showSuggestions && (
+              <View style={styles.suggestions}>
+                {recent.length > 0 && (
+                  <>
+                    <Text style={styles.suggestionTitle}>Recent searches</Text>
+                    <View style={styles.suggestionRow}>
+                      {recent.map(term => (
+                        <Pressable key={term} style={styles.suggestion} onPress={() => searchFor(term)}>
+                          <Feather name="clock" size={13} color={colors.muted} />
+                          <Text style={styles.suggestionText}>{term}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </>
+                )}
+                {popular.length > 0 && (
+                  <>
+                    <Text style={styles.suggestionTitle}>Popular near you</Text>
+                    <View style={styles.suggestionRow}>
+                      {popular.map(term => (
+                        <Pressable key={term} style={styles.suggestion} onPress={() => searchFor(term)}>
+                          <Feather name="trending-up" size={13} color={colors.brand} />
+                          <Text style={styles.suggestionText}>{term}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </>
+                )}
+              </View>
+            )}
+
+            {fewRiders && restaurants.length > 0 && (
+              <View style={styles.demandBanner}>
+                <Feather name="zap" size={16} color={colors.warning} />
+                <Text style={styles.demandBannerText}>
+                  High demand in your area. Delivery partners are busy, so orders may take a little longer.
+                </Text>
+              </View>
+            )}
 
             {offers.length > 0 && (
               <ScrollView
@@ -245,6 +351,39 @@ export default function HomeScreen() {
               </View>
             )}
 
+            <View style={styles.chipRowWrap}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.chipRow}
+              >
+                <Pressable
+                  style={[styles.chip, sort !== 'relevance' && styles.chipActive]}
+                  onPress={() => setSorting(true)}
+                >
+                  <Text style={[styles.chipLabel, sort !== 'relevance' && styles.chipLabelActive]}>
+                    {sort === 'relevance' ? 'Sort' : SORTS.find(option => option.id === sort)!.label.split(':')[0]}
+                  </Text>
+                  <Feather name="chevron-down" size={14} color={sort !== 'relevance' ? colors.surface : colors.body} />
+                </Pressable>
+                {[
+                  { label: 'Pure veg', on: vegOnly, flip: () => setVegOnly(value => !value) },
+                  { label: 'Rating 4.0+', on: topRated, flip: () => setTopRated(value => !value) },
+                  { label: 'Fast delivery', on: fastDelivery, flip: () => setFastDelivery(value => !value) },
+                ].map(filter => (
+                  <Pressable
+                    key={filter.label}
+                    style={[styles.chip, filter.on && styles.chipActive]}
+                    onPress={filter.flip}
+                    accessibilityState={{ selected: filter.on }}
+                  >
+                    <Text style={[styles.chipLabel, filter.on && styles.chipLabelActive]}>{filter.label}</Text>
+                    {filter.on && <Feather name="x" size={13} color={colors.surface} />}
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>
                 {cuisine ? cuisine : settledSearch ? 'Results' : 'All restaurants'}
@@ -260,7 +399,11 @@ export default function HomeScreen() {
         renderItem={({ item }) => (
           <RestaurantCard
             restaurant={item}
-            onPress={() => router.push({ pathname: '/restaurant/[id]', params: { id: item.id } })}
+            onPress={() => {
+              // A search that led somewhere is worth suggesting again.
+              if (settledSearch) rememberSearch(settledSearch).then(setRecent)
+              router.push({ pathname: '/restaurant/[id]', params: { id: item.id } })
+            }}
             onToggleFavourite={() => toggleFavourite(item)}
           />
         )}
@@ -307,24 +450,21 @@ export default function HomeScreen() {
                   ? `Nothing matching "${settledSearch}" near you`
                   : 'No restaurants deliver to this address yet'}
               </Text>
-              {(settledSearch || cuisine) && (
-                <Pressable
-                  style={styles.ghostButton}
-                  onPress={() => {
-                    setSearch('')
-                    setCuisine(null)
-                  }}
-                >
+              {(settledSearch || cuisine || filtering) && (
+                <Pressable style={styles.ghostButton} onPress={clearFilters}>
                   <Text style={styles.ghostButtonText}>Clear filters</Text>
                 </Pressable>
               )}
             </View>
           )
         }
-        contentContainerStyle={[styles.listContent, cart.count > 0 && { paddingBottom: 96 }]}
+        // Room for the live order bar and the cart bar over the end of the list.
+        contentContainerStyle={[styles.listContent, { paddingBottom: cart.count > 0 ? 170 : 96 }]}
       />
 
-      {cart.count > 0 && (
+      <View style={styles.bottomStack} pointerEvents="box-none">
+        <ActiveOrderBar />
+        {cart.count > 0 && (
         <Pressable style={styles.cartBar} onPress={() => router.push('/cart')}>
           <View style={styles.cartBadge}>
             <Text style={styles.cartBadgeText}>{cart.count}</Text>
@@ -337,7 +477,39 @@ export default function HomeScreen() {
           </View>
           <Feather name="chevron-right" size={20} color={colors.surface} />
         </Pressable>
-      )}
+        )}
+      </View>
+
+      <Modal visible={sorting} transparent animationType="slide" onRequestClose={() => setSorting(false)}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => setSorting(false)}>
+          <Pressable style={styles.sheet} onPress={() => {}}>
+            <Text style={styles.sheetTitle}>Sort by</Text>
+            {SORTS.map(option => {
+              const chosen = option.id === sort
+
+              return (
+                <Pressable
+                  key={option.id}
+                  style={styles.sheetOption}
+                  onPress={() => {
+                    setSort(option.id)
+                    setSorting(false)
+                  }}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: chosen }}
+                >
+                  <Text style={[styles.sheetOptionText, chosen && styles.sheetOptionChosen]}>{option.label}</Text>
+                  <Feather
+                    name={chosen ? 'check-circle' : 'circle'}
+                    size={19}
+                    color={chosen ? colors.brand : colors.lineStrong}
+                  />
+                </Pressable>
+              )
+            })}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -390,6 +562,13 @@ function RestaurantCard({
         <Text style={styles.cardCuisine} numberOfLines={1}>
           {restaurant.cuisine}
         </Text>
+
+        {restaurant.highDemand && restaurant.isAcceptingOrders && (
+          <View style={styles.demandTag}>
+            <Feather name="zap" size={11} color={colors.warning} />
+            <Text style={styles.demandTagText}>High demand · may take a little longer</Text>
+          </View>
+        )}
 
         <View style={styles.cardFooter}>
           <Text style={styles.cardMeta}>{restaurant.eta}</Text>
@@ -606,11 +785,14 @@ const styles = StyleSheet.create({
   },
   ghostButtonText: { ...type.smallStrong, color: colors.brand },
 
-  cartBar: {
+  bottomStack: {
     position: 'absolute',
     left: space.lg,
     right: space.lg,
     bottom: space.lg,
+    gap: space.sm,
+  },
+  cartBar: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.md,
@@ -632,4 +814,52 @@ const styles = StyleSheet.create({
   cartBadgeText: { ...type.smallStrong, color: colors.surface },
   cartBarTitle: { ...type.bodyStrong, color: colors.surface },
   cartBarSub: { ...type.caption, color: '#ffffffcc', marginTop: 1 },
+
+  suggestions: { marginHorizontal: space.lg, marginTop: space.md, gap: space.sm },
+  suggestionTitle: { ...type.overline, color: colors.muted },
+  suggestionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
+  suggestion: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.lineStrong,
+  },
+  suggestionText: { ...type.small, color: colors.ink },
+
+  demandBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginHorizontal: space.lg,
+    marginTop: space.md,
+    padding: space.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.warningSoft,
+  },
+  demandBannerText: { flex: 1, ...type.small, color: colors.warning },
+  demandTag: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: space.xs },
+  demandTagText: { ...type.caption, color: colors.warning, fontWeight: '600' },
+
+  sheetBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay },
+  sheet: {
+    padding: space.lg,
+    paddingBottom: space.xxl,
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    backgroundColor: colors.surface,
+  },
+  sheetTitle: { ...type.heading, color: colors.ink, marginBottom: space.sm },
+  sheetOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: space.md,
+  },
+  sheetOptionText: { ...type.body, color: colors.body },
+  sheetOptionChosen: { color: colors.ink, fontWeight: '700' },
 })

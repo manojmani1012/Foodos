@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useMemo, useState } from 'react'
 
 import type { MenuItem, Restaurant } from './catalogue'
+import type { DeliveryPreference } from './orders'
 
 // The cart lives here so the menu screen, the cart bar and checkout all read the
 // same thing.
@@ -17,7 +18,19 @@ export type CartLine = {
   addOns: { id: string; label: string; price: number }[]
 }
 
+// Chosen in the cart and at checkout: cooking notes and cutlery go to the
+// kitchen, delivery preferences to the rider.
+export type CartNotes = {
+  cooking: string
+  noCutlery: boolean
+  delivery: DeliveryPreference[]
+}
+
+const NO_NOTES: CartNotes = { cooking: '', noCutlery: false, delivery: [] }
+
 type CartValue = {
+  notes: CartNotes
+  setNotes: (change: Partial<CartNotes>) => void
   lines: CartLine[]
   restaurant: Restaurant | null
   count: number
@@ -42,6 +55,11 @@ function lineKey(itemId: string, addOns: CartLine['addOns']): string {
 export function CartProvider({ children }: { children: React.ReactNode }) {
   const [lines, setLines] = useState<CartLine[]>([])
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null)
+  const [notes, setNotesState] = useState<CartNotes>(NO_NOTES)
+
+  const setNotes = useCallback((change: Partial<CartNotes>) => {
+    setNotesState(previous => ({ ...previous, ...change }))
+  }, [])
 
   const add = useCallback((nextRestaurant: Restaurant, item: MenuItem, addOns: CartLine['addOns'] = []) => {
     setLines(previous => {
@@ -81,6 +99,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const clear = useCallback(() => {
     setLines([])
     setRestaurant(null)
+    setNotesState(NO_NOTES)
   }, [])
 
   const value = useMemo<CartValue>(() => {
@@ -92,6 +111,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     )
 
     return {
+      notes,
+      setNotes,
       lines,
       restaurant,
       count,
@@ -105,7 +126,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       decrement,
       clear,
     }
-  }, [lines, restaurant, add, increment, decrement, clear])
+  }, [notes, setNotes, lines, restaurant, add, increment, decrement, clear])
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>
 }

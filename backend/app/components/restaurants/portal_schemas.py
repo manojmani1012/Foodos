@@ -10,6 +10,16 @@ class AcceptingOrdersBody(BaseModel):
     isAcceptingOrders: bool
 
 
+class AcceptOrderBody(BaseModel):
+    # "Ready in 20 min": the kitchen's time for this order. Left out, the
+    # restaurant's usual prep time applies.
+    prepMinutes: Optional[int] = Field(default=None, ge=5, le=120)
+
+
+class MorePrepTimeBody(BaseModel):
+    minutes: int = Field(ge=5, le=30)
+
+
 class RejectOrderBody(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=300)
 
