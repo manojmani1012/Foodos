@@ -12,6 +12,7 @@ from ..geo import distance_km, ride_minutes
 from ..notifications import events
 from ..payments import refunds
 from .delivery_code import code_required, new_code
+from ..test_accounts import is_test_account
 from .pricing import quote_cart, quote_serviceability
 
 # What the customer may do, and when. The restaurant and delivery apps drive the
@@ -324,7 +325,9 @@ async def place_order(
 
     # The restaurant must deliver to this pin: no pin, no order, and nothing
     # beyond the restaurant's radius (an order once went 340 km).
-    reach = quote_serviceability(quote, delivery_address["latitude"], delivery_address["longitude"])
+    reach = quote_serviceability(
+        quote, delivery_address["latitude"], delivery_address["longitude"], await is_test_account(user_id)
+    )
 
     if not reach.ok:
         raise AppError(

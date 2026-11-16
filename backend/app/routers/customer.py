@@ -26,6 +26,7 @@ from ..components.orders.schemas import (
 )
 from ..errors import not_found
 from ..components.restaurants import service
+from ..components.test_accounts import is_test_account
 from ..components.restaurants.schemas import Offer, RestaurantDetail, RestaurantList, RestaurantSummary
 
 router = APIRouter(prefix="/api/v1/customer", tags=["customer"])
@@ -70,8 +71,11 @@ async def list_cuisines(
     city: Optional[str] = Query(default=None),
     latitude: Optional[float] = Latitude,
     longitude: Optional[float] = Longitude,
+    user: Optional[CurrentUser] = Depends(optional_authenticate),
 ):
-    return {"ok": True, "cuisines": await service.list_cuisines(city, latitude, longitude)}
+    anywhere = await is_test_account(user.id if user else None)
+
+    return {"ok": True, "cuisines": await service.list_cuisines(city, latitude, longitude, anywhere)}
 
 
 @router.get("/offers", response_model=None)
@@ -167,7 +171,9 @@ async def quote_cart_endpoint(
         )
 
         if address:
-            result["serviceable"] = quote_serviceability(quote, address["latitude"], address["longitude"]).to_dict()
+            result["serviceable"] = quote_serviceability(
+                quote, address["latitude"], address["longitude"], await is_test_account(user.id)
+            ).to_dict()
 
     return result
 

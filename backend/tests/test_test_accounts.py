@@ -5,7 +5,7 @@ riders, wherever they are, and the "be at the pin" check is off for it. Real
 orders keep every rule and never go to a test rider.
 """
 
-from app.database import fetchval
+from app.database import fetchval, transaction
 
 from test_admin import admin, latest_activity  # noqa: F401 - the admin fixture
 from test_delivery import BENGALURU, code_for, requests_for, rider, step
@@ -117,3 +117,52 @@ class TestTheSwitch:
         )
 
         assert response.status_code == 403
+
+
+class TestTestCustomers:
+    async def test_a_test_customer_sees_every_restaurant_and_can_order_from_far_away(self, client, admin):
+        _, restaurant_id = await owner_with_restaurant(client)
+        item = await make_item(restaurant_id)
+        tester = await sign_in(client, "9876543210", "customer")
+        await mark_test(client, admin, tester)
+        far = {"latitude": BENGALURU[0], "longitude": BENGALURU[1]}
+
+        listed = (
+            await client.get("/api/v1/customer/restaurants", params=far, headers=tester["headers"])
+        ).json()["restaurants"]
+        placed = await order_with(client, tester, item, **far)
+
+        assert [(r["id"], r["deliversHere"]) for r in listed] == [(str(restaurant_id), True)]
+        assert placed.status_code == 201, placed.text
+
+    async def test_a_real_customer_keeps_the_delivery_radius(self, client):
+        _, restaurant_id = await owner_with_restaurant(client)
+        item = await make_item(restaurant_id)
+        customer = await sign_in(client, "9876543210", "customer")
+        far = {"latitude": BENGALURU[0], "longitude": BENGALURU[1]}
+
+        listed = (
+            await client.get("/api/v1/customer/restaurants", params=far, headers=customer["headers"])
+        ).json()["restaurants"]
+        placed = await order_with(client, customer, item, **far)
+
+        assert listed == []
+        assert placed.status_code == 409
+        assert placed.json()["code"] == "address_too_far"
+
+    async def test_the_seed_makes_a_ready_test_customer_and_rider(self, client):
+        from db.seed import TEST_CUSTOMER, TEST_RIDER, seed_test_accounts
+
+        async with transaction() as connection:
+            await seed_test_accounts(connection)
+            await seed_test_accounts(connection)  # safe to run again
+
+        customer = await sign_in(client, TEST_CUSTOMER["phone"][3:], "customer")
+        test_rider = await sign_in(client, TEST_RIDER["phone"][3:], "delivery_partner")
+        addresses = (await client.get("/api/v1/customer/addresses", headers=customer["headers"])).json()["addresses"]
+        partner = (await client.get("/api/v1/delivery/me", headers=test_rider["headers"])).json()["partner"]
+
+        assert [a["label"] for a in addresses] == ["Test address"]
+        assert addresses[0]["latitude"] is not None, "pinned, so it can be ordered to"
+        assert partner["status"] == "active", "approved, so it can go online at once"
+        assert await fetchval("select count(*) from users where is_test") == 2

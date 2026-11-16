@@ -67,9 +67,11 @@ def serviceability(
     radius_km: Any,
     address_lat: Any,
     address_lng: Any,
+    anywhere: bool = False,
 ) -> Serviceability:
     """Whether a restaurant delivers to a pinned address: both must be on the
-    map, and no further apart than the restaurant's delivery radius."""
+    map, and no further apart than the restaurant's delivery radius (unless
+    `anywhere`: a test account, which may order from any distance)."""
     radius = float(radius_km) if radius_km is not None else get_settings().delivery_radius_km
 
     if restaurant_lat is None or restaurant_lng is None:
@@ -88,7 +90,7 @@ def serviceability(
 
     distance = distance_km(restaurant_lat, restaurant_lng, address_lat, address_lng)
 
-    if distance > radius:
+    if distance > radius and not anywhere:
         return Serviceability(
             False,
             distance,
@@ -451,7 +453,7 @@ async def quote_cart(
     )
 
 
-def quote_serviceability(quote: Quote, address_lat: Any, address_lng: Any) -> Serviceability:
+def quote_serviceability(quote: Quote, address_lat: Any, address_lng: Any, anywhere: bool = False) -> Serviceability:
     return serviceability(
         quote.restaurant_name,
         quote.restaurant_lat,
@@ -459,4 +461,5 @@ def quote_serviceability(quote: Quote, address_lat: Any, address_lng: Any) -> Se
         quote.restaurant_radius_km,
         address_lat,
         address_lng,
+        anywhere,
     )

@@ -11,6 +11,7 @@ from ...config import get_settings
 from ...database import fetch, fetchrow, fetchval
 from ...errors import not_found
 from ..geo import distance_km, ride_minutes, sql_distance_km
+from ..test_accounts import is_test_account
 from .schemas import (
     MenuAddon,
     MenuCategory,
@@ -53,7 +54,7 @@ def _radius(row: Any) -> float:
 
 
 def _to_summary(
-    row: Any, favourite_ids: set[uuid.UUID], distance: Optional[float] = None
+    row: Any, favourite_ids: set[uuid.UUID], distance: Optional[float] = None, anywhere: bool = False
 ) -> RestaurantSummary:
     prep = row["avg_prep_minutes"]
     eta_min = prep + ride_minutes(distance) if distance is not None else prep
@@ -74,7 +75,7 @@ def _to_summary(
         isAcceptingOrders=row["is_accepting_orders"],
         isFavourite=row["id"] in favourite_ids,
         distanceKm=round(distance, 1) if distance is not None else None,
-        deliversHere=distance <= _radius(row) if distance is not None else None,
+        deliversHere=(anywhere or distance <= _radius(row)) if distance is not None else None,
     )
 
 
@@ -110,13 +111,17 @@ async def list_restaurants(
         conditions.append(f"r.city ilike {placeholder(city)}")
 
     # Only restaurants that deliver to the customer's pin, the way the delivery
-    # apps list them.
+    # apps list them. A test account sees every restaurant.
     distance_sql = "null::float8"
+    anywhere = await is_test_account(user_id)
 
     if latitude is not None and longitude is not None:
         distance_sql = sql_distance_km("r.latitude", "r.longitude", placeholder(latitude), placeholder(longitude))
         default_radius = placeholder(get_settings().delivery_radius_km)
-        conditions.append(f"{distance_sql} <= coalesce(r.delivery_radius_km::float8, {default_radius}::float8)")
+        everywhere = placeholder(anywhere)
+        conditions.append(
+            f"({everywhere}::boolean or {distance_sql} <= coalesce(r.delivery_radius_km::float8, {default_radius}::float8))"
+        )
 
     relevance = None
 
@@ -192,7 +197,7 @@ async def list_restaurants(
     favourites = await _favourite_ids(user_id)
 
     return {
-        "restaurants": [_to_summary(row, favourites, row["distance_km"]) for row in rows],
+        "restaurants": [_to_summary(row, favourites, row["distance_km"], anywhere) for row in rows],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -226,7 +231,12 @@ async def get_restaurant(
         raise not_found("restaurant_not_found", "That restaurant is no longer available")
 
     favourites = await _favourite_ids(user_id)
-    summary = _to_summary(row, favourites, distance_km(row["latitude"], row["longitude"], latitude, longitude))
+    summary = _to_summary(
+        row,
+        favourites,
+        distance_km(row["latitude"], row["longitude"], latitude, longitude),
+        await is_test_account(user_id),
+    )
 
     # One round trip for the whole menu: the restaurant screen needs every
     # category, item and add-on at once, and mobile networks punish extra calls.
@@ -354,7 +364,10 @@ async def list_offers(restaurant_id: Optional[str] = None) -> list[Offer]:
 
 
 async def list_cuisines(
-    city: Optional[str] = None, latitude: Optional[float] = None, longitude: Optional[float] = None
+    city: Optional[str] = None,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
+    anywhere: bool = False,
 ) -> list[str]:
     """The category chips on the home screen, built from what is actually on the
     platform rather than a hard-coded list: near the customer, when their pin
@@ -362,7 +375,7 @@ async def list_cuisines(
     nearby = "true"
     args: list[Any] = [city]
 
-    if latitude is not None and longitude is not None:
+    if latitude is not None and longitude is not None and not anywhere:
         args += [latitude, longitude, get_settings().delivery_radius_km]
         nearby = (
             f"{sql_distance_km('r.latitude', 'r.longitude', '$2', '$3')}"
@@ -434,8 +447,9 @@ async def list_favourites(
     )
 
     ids = {row["id"] for row in rows}
+    anywhere = await is_test_account(user_id)
 
     return [
-        _to_summary(row, ids, distance_km(row["latitude"], row["longitude"], latitude, longitude))
+        _to_summary(row, ids, distance_km(row["latitude"], row["longitude"], latitude, longitude), anywhere)
         for row in rows
     ]

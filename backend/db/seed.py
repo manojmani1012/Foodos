@@ -12,6 +12,7 @@ Never run this against production.
 import asyncio
 import sys
 from pathlib import Path
+from typing import Any
 
 import asyncpg
 from dotenv import load_dotenv
@@ -413,6 +414,85 @@ async def seed_demo_extras(connection: asyncpg.Connection) -> None:
     print(f"Ready: {len(DEMO_RIDERS)} approved demo rider(s)")
 
 
+# Ready-made test accounts for the client's staff to run one whole order from
+# anywhere (see migration 0016). The customer sees and can order from every
+# restaurant whatever the distance; their orders go only to test riders, with
+# no "be at the pin" checks, and are not paid out. Sign in with the phone number
+# and the code shown on screen (staging) or sent by SMS.
+TEST_CUSTOMER = {
+    "phone": "+919200000001",
+    "name": "Foodos Test Customer",
+    "address": {
+        "label": "Test address",
+        "line1": "Flat 1, Foodos Test Apartments",
+        "line2": "Near Mambalam railway station, T Nagar",
+        "landmark": "Opposite the station entrance",
+        "city": "Chennai",
+        "pincode": "600017",
+        "latitude": 13.0372,
+        "longitude": 80.2285,
+    },
+}
+TEST_RIDER = {"phone": "+919200000002", "name": "Foodos Test Rider", "vehicle": "bike", "number": "TN 00 TEST 01"}
+
+
+async def seed_test_accounts(connection: asyncpg.Connection) -> None:
+    """Safe to repeat: creates the two test accounts, or marks them as test
+    accounts again, and adds the customer's address once."""
+
+    async def account(phone: str, name: str, role: str) -> Any:
+        user_id = await connection.fetchval(
+            """
+            insert into users (phone, full_name, is_test) values ($1, $2, true)
+            on conflict (phone) do update
+              set is_test = true, full_name = coalesce(users.full_name, excluded.full_name)
+            returning id
+            """,
+            phone,
+            name,
+        )
+        await connection.execute(
+            "insert into user_roles (user_id, role) values ($1, $2) on conflict do nothing", user_id, role
+        )
+
+        return user_id
+
+    customer_id = await account(TEST_CUSTOMER["phone"], TEST_CUSTOMER["name"], "customer")
+    address = TEST_CUSTOMER["address"]
+    await connection.execute(
+        """
+        insert into customer_addresses
+          (user_id, label, line1, line2, landmark, city, pincode, latitude, longitude, is_default)
+        select $1, $2, $3, $4, $5, $6, $7, $8, $9,
+               not exists (select 1 from customer_addresses where user_id = $1 and is_default)
+        where not exists (select 1 from customer_addresses where user_id = $1 and label = $2)
+        """,
+        customer_id,
+        address["label"],
+        address["line1"],
+        address["line2"],
+        address["landmark"],
+        address["city"],
+        address["pincode"],
+        address["latitude"],
+        address["longitude"],
+    )
+
+    rider_id = await account(TEST_RIDER["phone"], TEST_RIDER["name"], "delivery_partner")
+    await connection.execute(
+        """
+        insert into delivery_partners (user_id, vehicle_type, vehicle_number, city, status)
+        values ($1, $2, $3, 'Chennai', 'active')
+        on conflict (user_id) do update set status = 'active', city = coalesce(delivery_partners.city, 'Chennai')
+        """,
+        rider_id,
+        TEST_RIDER["vehicle"],
+        TEST_RIDER["number"],
+    )
+
+    print(f"Ready: test customer {TEST_CUSTOMER['phone']} and test rider {TEST_RIDER['phone']}")
+
+
 async def main() -> None:
     settings = get_settings()
 
@@ -428,6 +508,7 @@ async def main() -> None:
         async with connection.transaction():
             await seed(connection, reset="--reset" in sys.argv)
             await seed_demo_extras(connection)
+            await seed_test_accounts(connection)
     finally:
         await connection.close()
 
