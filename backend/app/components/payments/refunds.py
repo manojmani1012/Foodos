@@ -18,6 +18,9 @@ from typing import Any, Optional
 
 from ...database import execute, fetchrow, transaction
 from ...errors import AppError
+from ..admin import audit
+from ..payouts import ledger
+from ..wallet import service as wallet
 from . import razorpay
 
 logger = logging.getLogger("foodos.refunds")
@@ -33,6 +36,8 @@ def refund_to_dict(row: Optional[Any]) -> Optional[dict]:
     return {
         "status": row["status"],
         "amountPaise": row["amount_paise"],
+        # 'original' (back to the card or UPI account) or 'wallet' (Foodos wallet).
+        "destination": row["destination"],
         "requestedAt": row["created_at"].isoformat() if row["created_at"] else None,
         "processedAt": row["processed_at"].isoformat() if row["processed_at"] else None,
     }
@@ -42,7 +47,22 @@ async def refund_for_order(order_id: uuid.UUID) -> Optional[dict]:
     """The latest refund on an order, for showing in the apps."""
     row = await fetchrow(
         """
-        select status, amount_paise, created_at, processed_at
+        select status, amount_paise, destination, created_at, processed_at
+        from refunds
+        where order_id = $1
+        order by created_at desc
+        limit 1
+        """,
+        order_id,
+    )
+
+    return refund_to_dict(row)
+
+
+async def refund_for_order_in(connection, order_id: uuid.UUID) -> Optional[dict]:
+    row = await connection.fetchrow(
+        """
+        select status, amount_paise, destination, created_at, processed_at
         from refunds
         where order_id = $1
         order by created_at desc
@@ -67,11 +87,11 @@ async def refund_if_paid(
     async with transaction() as connection:
         payment = await connection.fetchrow(
             """
-            select p.id, p.provider_payment_id, p.amount_paise
+            select p.id, p.provider, p.user_id, p.provider_payment_id, p.amount_paise
             from payments p
             join orders o on o.id = p.order_id
             where p.order_id = $1
-              and p.provider = 'razorpay'
+              and p.provider in ('razorpay', 'wallet')
               and p.status = 'captured'
               and o.status = 'cancelled'
             for update of p
@@ -87,9 +107,9 @@ async def refund_if_paid(
 
         existing = await connection.fetchrow(
             """
-            select status, amount_paise, created_at, processed_at
+            select status, amount_paise, destination, created_at, processed_at
             from refunds
-            where payment_id = $1 and status <> 'failed'
+            where payment_id = $1 and status <> 'failed' and charged_to is null
             """,
             payment["id"],
         )
@@ -97,6 +117,40 @@ async def refund_if_paid(
         # Already refunded, by an earlier call or by the other route here.
         if existing is not None:
             return refund_to_dict(existing)
+
+        if payment["provider"] == "wallet":
+            # Paid from the wallet, so it goes back to the wallet at once, in
+            # this same transaction: no gateway, nothing to wait for.
+            wallet_refund_id = await connection.fetchval(
+                """
+                insert into refunds
+                  (payment_id, order_id, amount_paise, reason, status, requested_by, processed_at, destination)
+                values ($1, $2, $3, $4, 'processed', $5, now(), 'wallet')
+                returning id
+                """,
+                payment["id"],
+                order_id,
+                payment["amount_paise"],
+                reason,
+                requested_by,
+            )
+            await wallet.move(
+                connection,
+                payment["user_id"],
+                "credit",
+                "refund",
+                payment["amount_paise"],
+                order_id=order_id,
+                refund_id=wallet_refund_id,
+            )
+            await connection.execute(
+                "update payments set status = 'refunded', updated_at = now() where id = $1", payment["id"]
+            )
+            await connection.execute(
+                "update orders set payment_status = 'refunded' where id = $1", order_id
+            )
+
+            return await refund_for_order_in(connection, order_id)
 
         refund = await connection.fetchrow(
             """
@@ -175,7 +229,7 @@ async def apply_refund_webhook(event_type: str, entity: dict) -> dict:
         updated = await fetchrow(
             """
             update refunds set status = 'failed' where provider_refund_id = $1
-            returning order_id, payment_id
+            returning id, order_id, payment_id
             """,
             provider_refund_id,
         )
@@ -191,6 +245,9 @@ async def apply_refund_webhook(event_type: str, entity: dict) -> dict:
             await execute(
                 "update orders set payment_status = 'paid' where id = $1", updated["order_id"]
             )
+            # A partial refund charged to a restaurant or rider did not happen
+            # after all, so it must not come off their payout either.
+            await ledger.reverse_refund(updated["id"])
 
     if updated is None:
         return {"handled": False, "reason": "unknown refund"}
@@ -198,3 +255,195 @@ async def apply_refund_webhook(event_type: str, entity: dict) -> dict:
     order_id = updated["order_id"]
 
     return {"handled": True, "event": event_type, "orderId": str(order_id) if order_id else None}
+
+
+# --- Partial refunds (admin) -----------------------------------------------
+
+
+async def partial_refund(
+    order_id: uuid.UUID, amount_paise: int, reason: str, charged_to: str, actor_id: uuid.UUID, ip: Optional[str]
+) -> dict:
+    """Gives back part of a delivered order: a missing item, a cold dish.
+
+    Card and UPI payments are refunded through Razorpay to where they came
+    from. Wallet orders, and cash orders (whose cash cannot be handed back
+    from here), are credited to the customer's Foodos wallet at once. The
+    refunds on an order can never add up to more than its total.
+
+    Charged to the restaurant or the rider, the refund comes off their next
+    payout (a 'refund' row in the earnings ledger); charged to Foodos, it
+    comes off nobody's.
+    """
+    reason = reason.strip()
+
+    async with transaction() as connection:
+        order = await connection.fetchrow(
+            """
+            select o.id, o.status, o.order_number, o.customer_id, o.restaurant_id, o.total_paise,
+                   o.payment_method, o.is_test, d.partner_id
+            from orders o left join deliveries d on d.order_id = o.id
+            where o.id = $1
+            for update of o
+            """,
+            order_id,
+        )
+
+        if order is None:
+            raise AppError(404, "order_not_found", "That order could not be found")
+
+        if order["status"] != "delivered":
+            raise AppError(409, "order_not_delivered", "Only a delivered order can be partly refunded. Cancel it instead")
+
+        refunded = await connection.fetchval(
+            "select coalesce(sum(amount_paise), 0)::int from refunds where order_id = $1 and status <> 'failed'",
+            order_id,
+        )
+        left = order["total_paise"] - refunded
+
+        if amount_paise > left:
+            raise AppError(
+                400,
+                "refund_too_large",
+                f"Only ₹{left / 100:,.2f} of this order is left to refund" if left > 0 else "This order is already fully refunded",
+                {"refundablePaise": left},
+            )
+
+        party_id = None
+
+        if charged_to == "restaurant":
+            party_id = order["restaurant_id"]
+        elif charged_to == "rider":
+            party_id = order["partner_id"]
+
+            if party_id is None:
+                raise AppError(400, "no_rider", "No rider delivered this order, so the refund cannot be charged to one")
+
+        payment = await connection.fetchrow(
+            """
+            select id, provider, provider_payment_id
+            from payments
+            where order_id = $1 and provider in ('razorpay', 'wallet') and status in ('captured', 'refunded')
+            order by created_at desc
+            limit 1
+            for update
+            """,
+            order_id,
+        )
+        to_wallet = payment is None or payment["provider"] == "wallet"
+
+        refund_id = await connection.fetchval(
+            """
+            insert into refunds
+              (payment_id, order_id, amount_paise, reason, status, requested_by, processed_at, charged_to, destination)
+            values ($1, $2, $3, $4, $5, $6, case when $5 = 'processed' then now() end, $7, $8)
+            returning id
+            """,
+            payment["id"] if payment else None,
+            order_id,
+            amount_paise,
+            reason,
+            "processed" if to_wallet else "pending",
+            actor_id,
+            charged_to,
+            "wallet" if to_wallet else "original",
+        )
+
+        if to_wallet:
+            await wallet.move(
+                connection,
+                order["customer_id"],
+                "credit",
+                "refund",
+                amount_paise,
+                order_id=order_id,
+                refund_id=refund_id,
+                note=reason,
+            )
+            await _after_refund(connection, order_id, order["total_paise"], payment, refund_id, party_id, charged_to,
+                                amount_paise, reason, actor_id, order["is_test"])
+
+        await _audit_refund(connection, actor_id, ip, order, amount_paise, charged_to, reason, to_wallet)
+
+    if to_wallet:
+        return {"refundId": str(refund_id), "status": "processed"}
+
+    # Card or UPI: the gateway is called after the refund row has committed.
+    try:
+        result = await razorpay.create_refund(
+            payment["provider_payment_id"],
+            amount_paise,
+            notes={"order_id": str(order_id), "reason": reason[:200], "partial": "yes"},
+        )
+    except AppError as error:
+        logger.error("Partial refund failed for order %s: %s", order_id, error.message)
+        await execute("update refunds set status = 'failed' where id = $1", refund_id)
+
+        raise AppError(502, "refund_gateway_error", f"Razorpay did not accept the refund. {error.message}".strip())
+
+    status = "processed" if result.get("status") == "processed" else "pending"
+
+    async with transaction() as connection:
+        await connection.execute(
+            """
+            update refunds
+            set status = $2, provider_refund_id = $3,
+                processed_at = case when $2 = 'processed' then now() else processed_at end
+            where id = $1
+            """,
+            refund_id,
+            status,
+            result.get("id"),
+        )
+        await _after_refund(connection, order_id, order["total_paise"], payment, refund_id, party_id, charged_to,
+                            amount_paise, reason, actor_id, order["is_test"])
+
+    return {"refundId": str(refund_id), "status": status}
+
+
+async def _after_refund(
+    connection, order_id, total_paise, payment, refund_id, party_id, charged_to, amount_paise, reason, actor_id, is_test
+) -> None:
+    """The order is 'refunded' only once the refunds cover all of it; the
+    party the refund is charged to has it taken off their next payout."""
+    refunded = await connection.fetchval(
+        "select coalesce(sum(amount_paise), 0)::int from refunds where order_id = $1 and status <> 'failed'", order_id
+    )
+
+    if refunded >= total_paise:
+        await connection.execute("update orders set payment_status = 'refunded' where id = $1", order_id)
+
+        if payment is not None:
+            await connection.execute(
+                "update payments set status = 'refunded', updated_at = now() where id = $1", payment["id"]
+            )
+
+    if party_id is not None and not is_test:
+        await ledger.record_refund(
+            connection,
+            refund_id,
+            "restaurant" if charged_to == "restaurant" else "delivery_partner",
+            party_id,
+            amount_paise,
+            order_id,
+            reason,
+            actor_id,
+        )
+
+
+async def _audit_refund(connection, actor_id, ip, order, amount_paise, charged_to, reason, to_wallet) -> None:
+    await audit.record(
+        actor_id,
+        "Refunded part of order",
+        "Orders",
+        "order",
+        order["id"],
+        {
+            "orderNumber": order["order_number"],
+            "amountPaise": amount_paise,
+            "chargedTo": charged_to,
+            "destination": "wallet" if to_wallet else "original",
+            "reason": reason,
+        },
+        ip,
+        connection,
+    )

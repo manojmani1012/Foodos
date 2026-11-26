@@ -1,11 +1,12 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { RiderFinder } from '../components/RiderFinder'
 import { TestBadge } from '../components/TestAccount'
-import { Badge, Card, ConfirmDialog, Details, ErrorBox, Loadable, PageHeader, StatusBadge } from '../components/ui'
+import { Badge, Card, ConfirmDialog, Details, ErrorBox, Field, Loadable, Modal, PageHeader, StatusBadge } from '../components/ui'
 import { api, mediaUrl } from '../lib/api'
 import {
   cancelledByLabel,
+  CHARGED_TO,
   DELIVERY_STATUS,
   formatDateTime,
   formatMoney,
@@ -18,7 +19,7 @@ import {
   titleCase,
 } from '../lib/format'
 import { useToast } from '../lib/toast'
-import type { Order } from '../lib/types'
+import type { Order, PaymentSettings, RefundChargedTo } from '../lib/types'
 import { useLoad } from '../lib/useLoad'
 
 const LIVE = ['pending', 'confirmed', 'preparing', 'ready', 'picked_up', 'on_the_way']
@@ -41,10 +42,115 @@ async function openInvoice(orderId: string) {
   }
 }
 
+// Money goes back where it came from: online payments to the card or UPI
+// through Razorpay; wallet and cash orders to the customer's Foodos wallet.
+function refundsToWallet(order: Order) {
+  return order.paymentMethod === 'wallet' || order.paymentMethod === 'cod'
+}
+
+function PartialRefund({ order, onDone, onClose }: { order: Order; onDone: (order: Order) => void; onClose: () => void }) {
+  const refunded = order.refunds.filter((refund) => refund.status !== 'failed').reduce((sum, refund) => sum + refund.amountPaise, 0)
+  const left = Math.max(0, order.totalPaise - refunded)
+  const [amount, setAmount] = useState('')
+  const [reason, setReason] = useState('')
+  const [chargedTo, setChargedTo] = useState<RefundChargedTo>('restaurant')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const wallet = refundsToWallet(order)
+
+  // Pre-select who bears it as set in Settings; Restaurant if that cannot load.
+  useEffect(() => {
+    api<{ settings: PaymentSettings }>('/api/v1/admin/finance/settings')
+      .then(({ settings }) => settings.refundChargedToDefault && setChargedTo(settings.refundChargedToDefault))
+      .catch(() => {})
+  }, [])
+
+  async function save(event?: FormEvent) {
+    event?.preventDefault()
+    const paise = Math.round(Number(amount) * 100)
+
+    if (!(paise > 0)) return setError('Enter the amount to refund, in rupees')
+    if (paise > left) return setError(`At most ${formatMoney(left)} can still be refunded on this order`)
+    if (reason.trim().length < 5) return setError('Write the reason (at least 5 characters)')
+
+    setBusy(true)
+    setError('')
+
+    try {
+      const result = await api<{ order: Order }>(`/api/v1/admin/orders/${order.id}/refunds`, {
+        method: 'POST',
+        body: { amountPaise: paise, reason: reason.trim(), chargedTo },
+      })
+      onDone(result.order)
+      onClose()
+    } catch (caught: any) {
+      setError(caught?.message || 'Could not refund')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      title={`Refund part of ${order.orderNumber}`}
+      onClose={busy ? () => {} : onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose} disabled={busy}>
+            Go back
+          </button>
+          <button className="btn btn-primary" onClick={() => save()} disabled={busy}>
+            {busy ? 'Refunding…' : 'Refund'}
+          </button>
+        </>
+      }
+    >
+      <form className="stack" onSubmit={save}>
+        <p className="muted small">
+          Order total {formatMoney(order.totalPaise)}
+          {refunded > 0 ? `, ${formatMoney(refunded)} already refunded` : ''}. Up to {formatMoney(left)} can be refunded.
+        </p>
+        <div className="form-grid two">
+          <Field label="Amount (₹)">
+            {(id) => <input id={id} className="input" inputMode="decimal" autoFocus value={amount} onChange={(e) => setAmount(e.target.value)} />}
+          </Field>
+          <Field
+            label="Charged to"
+            hint={
+              chargedTo === 'foodos'
+                ? 'Foodos bears it. Nobody\'s payout changes.'
+                : `Taken off the ${chargedTo === 'rider' ? 'rider' : 'restaurant'}'s next payout.`
+            }
+          >
+            {(id) => (
+              <select id={id} className="input" value={chargedTo} onChange={(e) => setChargedTo(e.target.value as RefundChargedTo)}>
+                {Object.entries(CHARGED_TO).map(([value, label]) => (
+                  <option key={value} value={value} disabled={value === 'rider' && !order.rider}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+        </div>
+        <Field label="Reason" hint="The customer sees this with the refund.">
+          {(id) => <textarea id={id} className="input" rows={2} maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)} />}
+        </Field>
+        <div className="notice notice-info">
+          {wallet
+            ? `This was a ${order.paymentMethod === 'cod' ? 'cash' : 'wallet'} order, so the money goes to the customer's Foodos wallet straight away.`
+            : 'The customer paid online, so Razorpay sends the money back to their card or UPI. Banks usually take 5–7 working days.'}
+        </div>
+        {error && <ErrorBox error={error} />}
+      </form>
+    </Modal>
+  )
+}
+
 export default function OrderDetail() {
   const { id = '' } = useParams()
   const toast = useToast()
   const [cancelling, setCancelling] = useState(false)
+  const [refunding, setRefunding] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const [retryError, setRetryError] = useState('')
 
@@ -119,6 +225,11 @@ export default function OrderDetail() {
                   {order.status === 'delivered' && (
                     <button className="btn" onClick={() => openInvoice(order.id)}>
                       GST invoice
+                    </button>
+                  )}
+                  {order.status === 'delivered' && !order.isTest && order.paymentStatus !== 'refunded' && (
+                    <button className="btn" onClick={() => setRefunding(true)}>
+                      Refund part of this order
                     </button>
                   )}
                   {order.actions.canCancel && (
@@ -281,6 +392,21 @@ export default function OrderDetail() {
                                   {formatDateTime(refund.requestedAt)}
                                   {refund.requestedBy ? ` · ${refund.requestedBy}` : ''}
                                 </div>
+                                {(refund.chargedTo || refund.destination || refund.reason) && (
+                                  <div className="sub">
+                                    {[
+                                      refund.destination === 'wallet'
+                                        ? 'To Foodos wallet'
+                                        : refund.destination === 'original'
+                                          ? 'To card / UPI'
+                                          : null,
+                                      refund.chargedTo ? `charged to ${CHARGED_TO[refund.chargedTo] || refund.chargedTo}` : null,
+                                      refund.reason ? `“${refund.reason}”` : null,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(' · ')}
+                                  </div>
+                                )}
                               </td>
                               <td className="mono small">{refund.providerRefundId || '—'}</td>
                               <td className="num">{formatMoney(refund.amountPaise)}</td>
@@ -401,6 +527,17 @@ export default function OrderDetail() {
                 </Card>
               </div>
             </div>
+
+            {refunding && (
+              <PartialRefund
+                order={order}
+                onDone={(updated) => {
+                  state.setData(updated)
+                  toast(refundsToWallet(order) ? 'Refunded to the customer\'s Foodos wallet' : 'Refund started with Razorpay')
+                }}
+                onClose={() => setRefunding(false)}
+              />
+            )}
 
             {cancelling && (
               <ConfirmDialog

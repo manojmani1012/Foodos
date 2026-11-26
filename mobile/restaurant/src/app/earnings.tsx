@@ -1,3 +1,5 @@
+import { Feather } from '@expo/vector-icons'
+import { useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
@@ -10,8 +12,20 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
+import { PayoutBreakdown, SCHEDULE_NOTE, StatusPill } from '@/components/PayoutBreakdown'
 import { ScreenHeader } from '@/components/ScreenHeader'
-import { fetchEarnings, formatRupees, type Earnings } from '@/lib/restaurant'
+import {
+  fetchEarnings,
+  fetchPayoutAccount,
+  fetchPayouts,
+  formatDay,
+  formatPeriod,
+  formatRupees,
+  type Earnings,
+  type PayoutAccount,
+  type PayoutsOverview,
+  type PayoutSummary,
+} from '@/lib/restaurant'
 import { colors, radius, shadow, space, type } from '@/theme'
 
 const RANGES = [
@@ -19,7 +33,19 @@ const RANGES = [
   { days: 30, label: 'Last 30 days' },
 ]
 
+function planLine(plan: PayoutsOverview['plan']): string {
+  const name =
+    plan.commissionPlan === 'subscription'
+      ? 'Subscription plan'
+      : plan.commissionPlan === 'custom'
+        ? 'Your agreed plan'
+        : 'Standard plan'
+
+  return `${name} · ${plan.commissionPct}% commission on food`
+}
+
 export default function EarningsScreen() {
+  const router = useRouter()
   const [days, setDays] = useState(7)
   const [earnings, setEarnings] = useState<Earnings | null>(null)
   const [loading, setLoading] = useState(true)
@@ -41,6 +67,36 @@ export default function EarningsScreen() {
     setLoading(true)
     load(days)
   }, [days, load])
+
+  // Payouts and the bank account do not depend on the range, and reload when
+  // coming back from the bank details screen.
+  const [payouts, setPayouts] = useState<PayoutsOverview | null>(null)
+  const [account, setAccount] = useState<PayoutAccount | null | undefined>(undefined)
+  const [payoutError, setPayoutError] = useState('')
+
+  const loadPayouts = useCallback(async () => {
+    const [overview, bank] = await Promise.allSettled([fetchPayouts(), fetchPayoutAccount()])
+
+    if (overview.status === 'fulfilled') {
+      setPayouts(overview.value)
+      setPayoutError('')
+    } else {
+      setPayoutError(overview.reason?.message || 'Could not load your payouts')
+    }
+
+    if (bank.status === 'fulfilled') setAccount(bank.value)
+  }, [])
+
+  useFocusEffect(
+    useCallback(() => {
+      loadPayouts()
+    }, [loadPayouts]),
+  )
+
+  const nextPayout: PayoutSummary | undefined = [...(payouts?.upcoming ?? [])].sort((a, b) =>
+    (a.scheduledFor ?? '').localeCompare(b.scheduledFor ?? ''),
+  )[0]
+  const unpaid = payouts?.unpaid
 
   const totals = earnings?.totals
   // Newest first, and only days that had orders: a month of zero rows says nothing.
@@ -78,7 +134,7 @@ export default function EarningsScreen() {
               refreshing={refreshing}
               onRefresh={async () => {
                 setRefreshing(true)
-                await load(days)
+                await Promise.all([load(days), loadPayouts()])
                 setRefreshing(false)
               }}
               tintColor={colors.brand}
@@ -118,6 +174,125 @@ export default function EarningsScreen() {
             </View>
           ) : null}
 
+          <Text style={styles.sectionTitle}>Payouts</Text>
+
+          {payoutError ? <Text style={styles.error}>{payoutError}</Text> : null}
+
+          {account !== undefined && account?.status !== 'verified' ? (
+            <Pressable style={styles.bankBanner} onPress={() => router.push('/bank')}>
+              <Feather name="credit-card" size={18} color={colors.warning} />
+              <View style={styles.flex}>
+                <Text style={styles.bankBannerTitle}>
+                  {!account
+                    ? 'Add your bank account for payouts'
+                    : account.status === 'rejected'
+                      ? 'Your bank details were rejected'
+                      : 'Your bank details are being checked'}
+                </Text>
+                <Text style={styles.bankBannerText}>
+                  {!account
+                    ? 'Foodos needs a bank account or UPI id to send your money.'
+                    : account.status === 'rejected'
+                      ? account.rejectReason || 'Please check and update them.'
+                      : 'Foodos checks new details before the first payout to them.'}
+                </Text>
+              </View>
+              <Feather name="chevron-right" size={18} color={colors.warning} />
+            </Pressable>
+          ) : null}
+
+          {payouts ? (
+            <>
+              <Text style={styles.planLine}>{planLine(payouts.plan)}</Text>
+
+              {unpaid ? (
+                <View style={[styles.hero, styles.gapTop]}>
+                  <Text style={styles.heroLabel}>Not paid yet</Text>
+                  <Text style={styles.heroValue}>{formatRupees(unpaid.duePaise)}</Text>
+                  <Text style={styles.heroHint}>
+                    {unpaid.entryCount === 0
+                      ? 'Nothing waiting: every delivered order is in a payout.'
+                      : unpaid.belowMinimum
+                        ? `Carried to the next payout, because payouts start at ${formatRupees(unpaid.minPayoutPaise)}.`
+                        : unpaid.nextPayDate
+                          ? `Expected in the payout on ${formatDay(unpaid.nextPayDate)}.`
+                          : 'Goes into your next scheduled payout.'}
+                  </Text>
+
+                  {unpaid.entryCount > 0 ? (
+                    <View style={styles.breakdown}>
+                      <PayoutBreakdown
+                        breakdown={unpaid.breakdown}
+                        totalLabel="Due to you"
+                        totalPaise={unpaid.duePaise}
+                      />
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {nextPayout ? (
+                <Pressable
+                  style={[styles.card, styles.nextCard]}
+                  onPress={() => router.push({ pathname: '/payout/[id]', params: { id: nextPayout.id } })}
+                >
+                  <View style={styles.flex}>
+                    <Text style={styles.heroLabel}>Next payout</Text>
+                    <Text style={styles.nextDate}>{formatDay(nextPayout.scheduledFor)}</Text>
+                    <Text style={styles.dayOrders}>
+                      For {formatPeriod(nextPayout.periodStart, nextPayout.periodEnd)}
+                    </Text>
+                    {nextPayout.status === 'on_hold' ? (
+                      <Text style={styles.holdText}>
+                        On hold{nextPayout.holdReason ? `: ${nextPayout.holdReason}` : ''}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <View style={styles.nextRight}>
+                    <Text style={styles.dayValue}>{formatRupees(nextPayout.netPaise)}</Text>
+                    <StatusPill status={nextPayout.status} />
+                  </View>
+                </Pressable>
+              ) : null}
+
+              <Text style={styles.subTitle}>Payout history</Text>
+              {payouts.history.length === 0 ? (
+                <Text style={styles.emptyText}>No payouts sent yet.</Text>
+              ) : (
+                <View style={styles.card}>
+                  {payouts.history.map((payout, index) => (
+                    <Pressable
+                      key={payout.id}
+                      style={[styles.dayRow, index === payouts.history.length - 1 && styles.dayRowLast]}
+                      onPress={() => router.push({ pathname: '/payout/[id]', params: { id: payout.id } })}
+                    >
+                      <View style={styles.flex}>
+                        <Text style={styles.dayDate}>
+                          {formatDay(payout.paidAt ? payout.paidAt.slice(0, 10) : payout.scheduledFor)}
+                        </Text>
+                        <Text style={styles.dayOrders}>
+                          For {formatPeriod(payout.periodStart, payout.periodEnd)}
+                          {payout.status === 'paid' && payout.reference ? ` · Ref ${payout.reference}` : ''}
+                        </Text>
+                      </View>
+                      <View style={styles.nextRight}>
+                        <Text style={styles.dayValue}>{formatRupees(payout.netPaise)}</Text>
+                        <StatusPill status={payout.status} />
+                      </View>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+
+              <Text style={styles.note}>
+                {SCHEDULE_NOTE} Foodos sends each payout to your bank account and marks it paid with
+                the bank reference (UTR).
+              </Text>
+            </>
+          ) : !payoutError ? (
+            <ActivityIndicator color={colors.brand} style={styles.gapTop} />
+          ) : null}
+
           <Text style={styles.sectionTitle}>By day</Text>
 
           {activeDays.length === 0 ? (
@@ -150,8 +325,7 @@ export default function EarningsScreen() {
 
           <Text style={styles.note}>
             Counts delivered orders only. Taxes go to the government, and the delivery fee and tips
-            pay for delivery, so neither is part of your earnings. Payout dates are set in your
-            agreement with Foodos.
+            pay for delivery, so neither is part of your earnings.
           </Text>
         </ScrollView>
       )}
@@ -251,6 +425,28 @@ const styles = StyleSheet.create({
   dayValue: { ...type.bodyStrong, color: colors.ink },
 
   note: { ...type.caption, color: colors.muted, marginTop: space.lg, lineHeight: 17 },
+
+  gapTop: { marginTop: space.md },
+  planLine: { ...type.smallStrong, color: colors.body },
+  subTitle: { ...type.smallStrong, color: colors.ink, marginTop: space.lg, marginBottom: space.sm },
+
+  bankBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    padding: space.md,
+    marginBottom: space.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.warningSoft,
+  },
+  bankBannerTitle: { ...type.smallStrong, color: colors.warning },
+  bankBannerText: { ...type.caption, color: colors.warning, marginTop: 2, lineHeight: 16 },
+
+  nextCard: { flexDirection: 'row', alignItems: 'center', gap: space.md, paddingVertical: space.lg, marginTop: space.md },
+  nextDate: { ...type.heading, color: colors.ink, marginTop: space.xs },
+  nextRight: { alignItems: 'flex-end', gap: space.xs },
+  holdText: { ...type.caption, color: colors.danger, marginTop: space.xs },
+
 
   error: {
     marginBottom: space.md,

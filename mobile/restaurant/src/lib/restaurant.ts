@@ -348,6 +348,177 @@ export async function fetchEarnings(days: number): Promise<Earnings> {
   return earnings as Earnings
 }
 
+// --- Payouts ---------------------------------------------------------------
+
+// Foodos works out each payout from delivered orders on a fixed schedule; its
+// staff send the money and mark it paid with the bank reference (UTR).
+
+export type PayoutStatus =
+  | 'scheduled'
+  | 'on_hold'
+  | 'processing'
+  | 'paid'
+  | 'failed'
+  | 'cancelled'
+  | 'pending'
+
+// What makes up an amount. Every field is in paise; deductions are positive numbers.
+export type PayoutBreakdown = Partial<{
+  foodPaise: number
+  packagingPaise: number
+  commissionPaise: number
+  gstOnCommissionPaise: number
+  tdsPaise: number
+  refundsPaise: number
+  adjustmentsPaise: number
+}>
+
+export type PayoutSummary = {
+  id: string
+  status: PayoutStatus
+  scheduledFor: string | null
+  periodStart: string | null
+  periodEnd: string | null
+  grossPaise: number
+  commissionPaise: number
+  adjustmentsPaise: number
+  netPaise: number
+  reference: string | null
+  paidAt: string | null
+  holdReason: string | null
+  failureReason?: string | null
+  breakdown?: PayoutBreakdown
+}
+
+export type PayoutEntry = {
+  id: number | string
+  kind: 'order' | 'refund' | 'adjustment' | string
+  orderId: string | null
+  orderNumber: string | null
+  businessDate: string
+  amountPaise: number
+  breakdown: Record<string, unknown> | null
+  note: string | null
+  createdAt: string
+}
+
+export type CommissionPlan = 'standard' | 'subscription' | 'custom'
+
+export type PayoutsOverview = {
+  plan: { commissionPlan: CommissionPlan; commissionPct: number }
+  unpaid: {
+    duePaise: number
+    entryCount: number
+    nextPayDate: string | null
+    belowMinimum: boolean
+    minPayoutPaise: number
+    breakdown?: PayoutBreakdown
+  }
+  upcoming: PayoutSummary[]
+  history: PayoutSummary[]
+}
+
+export async function fetchPayouts(): Promise<PayoutsOverview> {
+  const { ok, ...overview } = await request(`${BASE}/payouts`)
+
+  return overview as PayoutsOverview
+}
+
+export async function fetchPayout(payoutId: string): Promise<PayoutSummary & { entries: PayoutEntry[] }> {
+  const { payout } = await request(`${BASE}/payouts/${payoutId}`)
+
+  return payout
+}
+
+// A signed link, valid for 15 minutes, to a printable statement page.
+export async function fetchStatementUrl(payoutId: string): Promise<string> {
+  const { url } = await request(`${BASE}/payouts/${payoutId}/statement`, { method: 'POST' })
+
+  return resolveImageUrl(url) ?? url
+}
+
+// --- Bank account for payouts ---------------------------------------------
+
+export type PayoutAccountStatus = 'pending' | 'verified' | 'rejected'
+
+export type PayoutAccount = {
+  holder: string | null
+  accountNumberMasked: string | null
+  ifsc: string | null
+  bankName: string | null
+  upiId: string | null
+  status: PayoutAccountStatus
+  rejectReason: string | null
+  updatedAt: string | null
+}
+
+export type PayoutAccountChanges = Partial<{
+  holder: string | null
+  accountNumber: string | null
+  ifsc: string | null
+  bankName: string | null
+  upiId: string | null
+}>
+
+export async function fetchPayoutAccount(): Promise<PayoutAccount | null> {
+  const { account } = await request(`${BASE}/payout-account`)
+
+  return account ?? null
+}
+
+export async function savePayoutAccount(changes: PayoutAccountChanges): Promise<PayoutAccount> {
+  const { account } = await request(`${BASE}/payout-account`, { method: 'PUT', body: changes })
+
+  return account
+}
+
+export const IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/
+export const ACCOUNT_NUMBER_PATTERN = /^\d{9,18}$/
+export const UPI_PATTERN = /^[\w.\-]{2,}@[a-zA-Z]{2,}$/
+
+export function payoutAccountStatusLabel(account: PayoutAccount | null): string {
+  if (!account) return 'Not added yet'
+  if (account.status === 'verified') return 'Verified'
+  if (account.status === 'rejected') return 'Rejected, please check and update'
+
+  return 'Pending check by Foodos'
+}
+
+// "2026-11-21" is a calendar day, not an instant: build it in local time so a
+// phone in any time zone shows the same day.
+export function parseDay(day: string): Date {
+  const [year, month, date] = day.slice(0, 10).split('-').map(Number)
+
+  return new Date(year, (month || 1) - 1, date || 1)
+}
+
+export function formatDay(day: string | null, withWeekday = true): string {
+  if (!day) return ''
+
+  return parseDay(day).toLocaleDateString('en-IN', {
+    ...(withWeekday ? { weekday: 'short' as const } : {}),
+    day: 'numeric',
+    month: 'short',
+  })
+}
+
+export function formatPeriod(start: string | null, end: string | null): string {
+  if (!start && !end) return ''
+  if (!start || start === end) return formatDay(end ?? start, false)
+
+  return `${formatDay(start, false)} – ${formatDay(end, false)}`
+}
+
+export const PAYOUT_STATUS_LABELS: Record<PayoutStatus, string> = {
+  scheduled: 'Scheduled',
+  on_hold: 'On hold',
+  processing: 'Being sent',
+  paid: 'Paid',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+  pending: 'Pending',
+}
+
 // "09:30:00" from the server becomes "09:30" for display and editing.
 export function shortTime(value: string | null): string {
   return value ? value.slice(0, 5) : ''

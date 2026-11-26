@@ -15,10 +15,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import jobs
+from .components.payouts import settings as payment_settings
 from .config import get_settings
 from .database import connect_database, disconnect_database, ping_database
 from .errors import AppError
-from .routers import admin, auth, customer, delivery, invoices, media, notifications, restaurant, webhooks
+from .routers import (
+    admin,
+    auth,
+    customer,
+    delivery,
+    invoices,
+    media,
+    notifications,
+    restaurant,
+    statements,
+    support,
+    webhooks,
+)
 
 logger = logging.getLogger("foodos")
 
@@ -30,7 +43,15 @@ LAN_ORIGIN = re.compile(r"^http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await connect_database()
+    pool = await connect_database()
+
+    # Rider pay and commission are read from the database; the cache must be
+    # filled before the first offer goes out.
+    if pool is not None:
+        try:
+            await payment_settings.load()
+        except Exception:  # noqa: BLE001 - the defaults apply until the next pass
+            logger.exception("[startup] loading payment settings failed")
 
     # Offers, timeouts and auto-cancels (see jobs.py). Tests drive each step
     # directly instead.
@@ -154,7 +175,9 @@ app.include_router(admin.router)
 app.include_router(webhooks.router)
 app.include_router(media.router)
 app.include_router(invoices.router)
+app.include_router(statements.router)
 app.include_router(notifications.router)
+app.include_router(support.router)
 
 
 @app.exception_handler(404)

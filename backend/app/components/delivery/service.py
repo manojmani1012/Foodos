@@ -37,7 +37,9 @@ from ..notifications import events
 from ..orders.delivery_code import LOCK_SECONDS, MAX_ATTEMPTS, code_required
 from ..orders.notes import rider_note
 from . import cash, dispatch, targets
-from .dispatch import ACTIVE, as_address as _address, rider_pay, trip
+from ..payouts import ledger
+from ..payouts import settings as payment_settings
+from .dispatch import ACTIVE, as_address as _address, order_incentive, rider_pay, trip
 
 # Each rider action: which delivery statuses it may follow, the status it sets,
 # the timestamp it stamps, and what the customer's order becomes (if anything).
@@ -336,7 +338,8 @@ async def open_requests(user_id: uuid.UUID) -> list[dict]:
                 "itemCount": row["item_count"],
                 "pickupKm": pickup,
                 "dropKm": drop,
-                "earningPaise": rider_pay(total) + row["tip_paise"],
+                # What the rider will earn: base, distance, tip and the per-order incentive.
+                "earningPaise": rider_pay(total, drop) + row["tip_paise"] + order_incentive(row["is_test"]),
                 # Cash orders: what the rider must collect at the door.
                 "collectPaise": row["total_paise"]
                 if row["payment_method"] == "cod" and row["payment_status"] != "paid"
@@ -382,7 +385,7 @@ async def accept(user_id: uuid.UUID, delivery_id: str) -> dict:
 
         delivery = await connection.fetchrow(
             """
-            select d.id, d.status, d.order_id, o.tip_paise, o.delivery_address,
+            select d.id, d.status, d.order_id, o.tip_paise, o.delivery_address, o.is_test,
                    r.latitude as restaurant_lat, r.longitude as restaurant_lng
             from deliveries d
             join orders o on o.id = d.order_id
@@ -424,12 +427,14 @@ async def accept(user_id: uuid.UUID, delivery_id: str) -> dict:
             _address(delivery["delivery_address"]),
         )
 
+        base_pay, distance_pay = payment_settings.rider_pay_parts(total, drop)
+
         await connection.execute(
             """
             update deliveries
             set partner_id = $2, status = 'accepted', accepted_at = now(),
                 pickup_distance_km = $3, drop_distance_km = $4, total_distance_km = $5,
-                base_earning_paise = $6, tip_paise = $7
+                base_earning_paise = $6, tip_paise = $7, base_pay_paise = $8, distance_pay_paise = $9
             where id = $1
             """,
             identifier,
@@ -437,8 +442,10 @@ async def accept(user_id: uuid.UUID, delivery_id: str) -> dict:
             pickup,
             drop,
             total,
-            rider_pay(total),
+            base_pay + distance_pay,
             delivery["tip_paise"],
+            base_pay,
+            distance_pay,
         )
 
         await connection.execute(
@@ -451,7 +458,7 @@ async def accept(user_id: uuid.UUID, delivery_id: str) -> dict:
             """,
             identifier,
             user_id,
-            rider_pay(total) + delivery["tip_paise"],
+            base_pay + distance_pay + delivery["tip_paise"] + order_incentive(delivery["is_test"]),
         )
 
     await events.rider_assigned(delivery["order_id"])
@@ -678,6 +685,22 @@ async def advance(
         # The trip that reaches a daily target carries its bonus.
         bonuses = await targets.award(connection, user_id, identifier) if to_status == "delivered" else []
 
+        if to_status == "delivered" and not delivery["is_test"]:
+            # The flat per-order incentive, counted in incentive_paise too so
+            # every existing sum of rider pay includes it.
+            per_order = order_incentive(False)
+
+            if per_order:
+                await connection.execute(
+                    """
+                    update deliveries
+                    set order_incentive_paise = $2, incentive_paise = incentive_paise + $2
+                    where id = $1
+                    """,
+                    identifier,
+                    per_order,
+                )
+
         if order_status:
             order_stamp = {"picked_up": "picked_up_at", "delivered": "delivered_at"}.get(order_status)
             stamp_sql = f", {order_stamp} = now()" if order_stamp else ""
@@ -699,6 +722,12 @@ async def advance(
                 user_id,
                 ORDER_NOTES[order_status],
             )
+
+        # The earnings ledger, in the same transaction: the restaurant's
+        # share, the rider's pay and the cash they took. The sweeper writes
+        # the same rows if this is ever skipped.
+        if to_status == "delivered":
+            await ledger.record_order(connection, delivery["order_id"])
 
     # Told after the step has committed.
     await STEP_EVENTS[action](delivery["order_id"])
@@ -790,7 +819,11 @@ async def _delivery_detail(identifier: uuid.UUID) -> dict:
         "geofenceMetres": get_settings().geofence_metres,
         # A test order: no location check, so the app says so.
         "isTest": row["is_test"],
-        "earningPaise": row["base_earning_paise"] + row["incentive_paise"] + row["tip_paise"],
+        # Before delivery this includes the per-order incentive the trip will earn.
+        "earningPaise": row["base_earning_paise"]
+        + row["incentive_paise"]
+        + row["tip_paise"]
+        + (order_incentive(row["is_test"]) if row["status"] in ACTIVE else 0),
         "tipPaise": row["tip_paise"],
         "acceptedAt": row["accepted_at"].isoformat() if row["accepted_at"] else None,
         "deliveredAt": row["delivered_at"].isoformat() if row["delivered_at"] else None,
@@ -808,7 +841,10 @@ async def earnings(user_id: uuid.UUID, days: int) -> dict:
         )
         select d.day,
                count(x.id)::int as deliveries,
-               coalesce(sum(x.base_earning_paise), 0)::int as base,
+               -- Trips from before the base/distance split count wholly as base.
+               coalesce(sum(coalesce(x.base_pay_paise, x.base_earning_paise)), 0)::int as base,
+               coalesce(sum(x.base_earning_paise - coalesce(x.base_pay_paise, x.base_earning_paise)), 0)::int
+                 as distance,
                coalesce(sum(x.incentive_paise), 0)::int as incentive,
                coalesce(sum(x.tip_paise), 0)::int as tips,
                coalesce(sum(x.total_distance_km), 0)::float as km
@@ -837,9 +873,10 @@ async def earnings(user_id: uuid.UUID, days: int) -> dict:
             "date": row["day"].isoformat(),
             "deliveries": row["deliveries"],
             "basePaise": row["base"],
+            "distancePaise": row["distance"],
             "incentivePaise": row["incentive"],
             "tipsPaise": row["tips"],
-            "earningsPaise": row["base"] + row["incentive"] + row["tips"],
+            "earningsPaise": row["base"] + row["distance"] + row["incentive"] + row["tips"],
             "distanceKm": round(row["km"], 1),
         }
         for row in rows
@@ -853,6 +890,7 @@ async def earnings(user_id: uuid.UUID, days: int) -> dict:
         "totals": {
             "deliveries": total("deliveries"),
             "basePaise": total("basePaise"),
+            "distancePaise": total("distancePaise"),
             "incentivePaise": total("incentivePaise"),
             "tipsPaise": total("tipsPaise"),
             "earningsPaise": total("earningsPaise"),
@@ -863,6 +901,8 @@ async def earnings(user_id: uuid.UUID, days: int) -> dict:
         "cashCollectedTodayPaise": cash_today,
         # All cash not yet handed over or settled, and the limit on it.
         "cash": await cash.summary(user_id),
+        # How a trip is paid, for the app's "how pay works" sheet.
+        "payRule": payment_settings.pay_rule(),
     }
 
 

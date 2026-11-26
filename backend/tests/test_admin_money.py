@@ -9,7 +9,7 @@ import datetime
 
 import pytest
 
-from app.database import execute, fetchrow, fetchval
+from app.database import execute, fetchval
 
 from test_admin import admin, make_admin  # noqa: F401 - fixture
 from test_delivery import ANNA_NAGAR, T_NAGAR, accepted_order, code_for, go_to, requests_for, rider, step
@@ -137,7 +137,8 @@ class TestPayouts:
         line = statement["lines"][0]
         food = order["subtotalPaise"]
         packaging = order["packagingFeePaise"]
-        commission = round(food * 0.20)
+        # The standard plan: 22% of the food.
+        commission = round(food * 0.22)
 
         assert statement["canRecord"] is True
         assert line["count"] == 1
@@ -167,34 +168,43 @@ class TestPayouts:
         assert line["netPaise"] == earned - order["totalPaise"]
         assert line["netPaise"] < 0
 
-    async def test_a_period_is_paid_once(self, client, admin):
+    async def test_payouts_can_no_longer_be_recorded_by_hand(self, client, admin):
+        """Payouts are made on the schedule now (test_payouts_phase1.py); a
+        payout recorded by hand for any period could pay the same orders twice."""
         order, _, _ = await delivered_yesterday(client)
         restaurant_id = await fetchval("select restaurant_id from orders where id = $1::uuid", order["id"])
         day = await yesterday()
-        body = {
-            "partyType": "restaurant",
-            "partyId": str(restaurant_id),
-            "periodStart": day.isoformat(),
-            "periodEnd": day.isoformat(),
-            "reference": "UTR123456789",
-        }
 
-        first = await client.post("/api/v1/admin/payouts", json=body, headers=admin)
-        overlapping = await client.post(
+        response = await client.post(
             "/api/v1/admin/payouts",
-            json={**body, "periodStart": (day - datetime.timedelta(days=6)).isoformat()},
+            json={
+                "partyType": "restaurant",
+                "partyId": str(restaurant_id),
+                "periodStart": day.isoformat(),
+                "periodEnd": day.isoformat(),
+                "reference": "UTR123456789",
+            },
             headers=admin,
         )
 
-        assert first.status_code == 201, first.text
-        assert overlapping.status_code == 409
-        assert overlapping.json()["code"] == "payout_overlaps"
+        assert response.status_code == 405
+        assert await fetchval("select count(*) from payouts") == 0
 
-        stored = await fetchrow("select net_paise, payout_reference, status from payouts")
-        assert stored["net_paise"] == first.json()["line"]["netPaise"]
-        assert stored["payout_reference"] == "UTR123456789"
-        assert stored["status"] == "paid"
+    async def test_the_history_lists_paid_payouts(self, client, admin):
+        order, _, _ = await delivered_yesterday(client)
+        restaurant_id = await fetchval("select restaurant_id from orders where id = $1::uuid", order["id"])
+        day = await yesterday()
+        await execute(
+            """
+            insert into payouts (party_type, restaurant_id, period_start, period_end, net_paise, status,
+                                 payout_reference, paid_at)
+            values ('restaurant', $1, $2, $2, 1000, 'paid', 'UTR123456789', now())
+            """,
+            restaurant_id,
+            day,
+        )
 
+        history = (await client.get("/api/v1/admin/payouts", headers=admin)).json()
         statement = (
             await client.get(
                 "/api/v1/admin/payouts/statement",
@@ -202,48 +212,7 @@ class TestPayouts:
                 headers=admin,
             )
         ).json()
+
+        assert history["payouts"][0]["partyName"] == "The Biryani House"
         assert statement["lines"][0]["payout"]["reference"] == "UTR123456789"
         assert statement["totals"]["unpaidNetPaise"] == 0
-
-        history = (await client.get("/api/v1/admin/payouts", headers=admin)).json()
-        assert history["payouts"][0]["partyName"] == "The Biryani House"
-
-    async def test_today_cannot_be_paid_yet(self, client, admin):
-        order, _, _ = await delivered_yesterday(client)
-        restaurant_id = await fetchval("select restaurant_id from orders where id = $1::uuid", order["id"])
-        today = await fetchval("select current_date")
-
-        response = await client.post(
-            "/api/v1/admin/payouts",
-            json={
-                "partyType": "restaurant",
-                "partyId": str(restaurant_id),
-                "periodStart": (today - datetime.timedelta(days=1)).isoformat(),
-                "periodEnd": today.isoformat(),
-                "reference": "UTR123456789",
-            },
-            headers=admin,
-        )
-
-        assert response.status_code == 400
-        assert response.json()["code"] == "period_not_over"
-
-    async def test_nothing_delivered_means_nothing_to_pay(self, client, admin):
-        order, _, _ = await delivered_yesterday(client)
-        restaurant_id = await fetchval("select restaurant_id from orders where id = $1::uuid", order["id"])
-        long_ago = (await yesterday()) - datetime.timedelta(days=30)
-
-        response = await client.post(
-            "/api/v1/admin/payouts",
-            json={
-                "partyType": "restaurant",
-                "partyId": str(restaurant_id),
-                "periodStart": long_ago.isoformat(),
-                "periodEnd": long_ago.isoformat(),
-                "reference": "UTR123456789",
-            },
-            headers=admin,
-        )
-
-        assert response.status_code == 400
-        assert response.json()["code"] == "nothing_to_pay"

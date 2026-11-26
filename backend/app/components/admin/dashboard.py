@@ -5,6 +5,7 @@ restaurant and rider apps, so the figures agree with what partners see.
 """
 
 from ...database import fetch, fetchrow
+from ..support import service as support_service
 
 # How long an order can sit before someone at Foodos should look at it. An
 # unaccepted order is cancelled automatically at restaurant_accept_minutes
@@ -187,6 +188,8 @@ async def overview() -> dict:
             "pending": restaurants["pending"],
         },
         "customers": {"total": customers["total"], "newToday": customers["new_today"]},
+        # Tickets nobody at Foodos has answered yet.
+        "support": {"waiting": await support_service.waiting_count()},
         "attention": {
             "waitingForRestaurant": [_stuck_order(row) for row in waiting_for_restaurant],
             "waitingForRider": [_stuck_order(row) for row in waiting_for_rider],

@@ -30,6 +30,7 @@ from ...config import get_settings
 from ...database import fetch, transaction
 from ..geo import distance_km, sql_distance_km
 from ..notifications import events
+from ..payouts import settings as payment_settings
 from . import cash
 
 logger = logging.getLogger("foodos.dispatch")
@@ -45,10 +46,18 @@ DISPATCHABLE_ORDER = ("preparing", "ready")
 EXPIRED_PAUSE_SECONDS = 60
 
 
-def rider_pay(total_km: Optional[float]) -> int:
-    settings = get_settings()
+def rider_pay(total_km: Optional[float], drop_km: Optional[float] = None) -> int:
+    """Base plus distance pay for a trip, by the payment settings (see
+    payouts/settings.py). Tips and incentives come on top."""
+    base, distance = payment_settings.rider_pay_parts(total_km, drop_km)
 
-    return settings.rider_base_pay_paise + round((total_km or 0) * settings.rider_pay_per_km_paise)
+    return base + distance
+
+
+def order_incentive(is_test: bool) -> int:
+    """The flat per-order incentive a delivered trip earns. Test orders earn
+    nothing, so the offer screen does not promise it either."""
+    return 0 if is_test else int(payment_settings.current()["riderOrderIncentivePaise"])
 
 
 def trip(rider_lat: Any, rider_lng: Any, restaurant_lat: Any, restaurant_lng: Any, address: dict):
@@ -159,7 +168,7 @@ async def offer_next(delivery_id: uuid.UUID) -> Optional[uuid.UUID]:
         if rider is None:
             return None
 
-        _, _, total = trip(
+        _, drop, total = trip(
             rider["current_latitude"],
             rider["current_longitude"],
             delivery["latitude"],
@@ -177,7 +186,7 @@ async def offer_next(delivery_id: uuid.UUID) -> Optional[uuid.UUID]:
             """,
             delivery_id,
             rider["user_id"],
-            rider_pay(total) + delivery["tip_paise"],
+            rider_pay(total, drop) + delivery["tip_paise"] + order_incentive(delivery["is_test"]),
             settings.dispatch_offer_seconds,
         )
 

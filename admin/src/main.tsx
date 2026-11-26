@@ -12,12 +12,16 @@ import Login from './pages/Login'
 import Offers from './pages/Offers'
 import OrderDetail from './pages/OrderDetail'
 import Orders from './pages/Orders'
+import PayoutDetail from './pages/PayoutDetail'
 import Payouts from './pages/Payouts'
 import RestaurantDetail from './pages/RestaurantDetail'
 import RestaurantForm from './pages/RestaurantForm'
 import Restaurants from './pages/Restaurants'
 import RiderDetail from './pages/RiderDetail'
 import Riders from './pages/Riders'
+import Settings from './pages/Settings'
+import Support from './pages/Support'
+import SupportTicket from './pages/SupportTicket'
 import './styles.css'
 
 function App() {
@@ -52,6 +56,10 @@ function App() {
         <Route path="customers/:id" element={<CustomerDetail />} />
         <Route path="offers" element={<Offers />} />
         <Route path="payouts" element={<Payouts />} />
+        <Route path="payouts/:id" element={<PayoutDetail />} />
+        <Route path="settings" element={<Settings />} />
+        <Route path="support" element={<Support />} />
+        <Route path="support/:id" element={<SupportTicket />} />
         <Route path="activity" element={<Activity />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

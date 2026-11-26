@@ -9,6 +9,7 @@ import { useAuth } from '@/lib/AuthContext'
 import { confirmAction, tell } from '@/lib/confirm'
 import { useThemePreference, type ThemeChoice } from '@/lib/ThemeContext'
 import { deleteAccount } from '@/lib/profile'
+import { policyUrl } from '@/lib/support'
 import { colors, radius, shadow, space, type } from '@/theme'
 
 import { Header } from './cart'
@@ -123,12 +124,18 @@ export default function SettingsScreen() {
           <Row
             icon="file-text"
             label="Terms and conditions"
-            onPress={() => WebBrowser.openBrowserAsync('https://foodos.in/terms')}
+            onPress={() => WebBrowser.openBrowserAsync(policyUrl('terms'))}
           />
           <Row
             icon="shield"
             label="Privacy policy"
-            onPress={() => WebBrowser.openBrowserAsync('https://foodos.in/privacy')}
+            onPress={() => WebBrowser.openBrowserAsync(policyUrl('privacy'))}
+            divider
+          />
+          <Row
+            icon="rotate-ccw"
+            label="Refund and cancellation"
+            onPress={() => WebBrowser.openBrowserAsync(policyUrl('refund'))}
             divider
           />
           <Row icon="info" label="Version" value="1.0.0 (development)" divider />

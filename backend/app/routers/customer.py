@@ -15,11 +15,13 @@ from ..components.orders import service as order_service
 from ..components.orders.pricing import quote_cart, quote_serviceability
 from ..components.orders import profile as profile_service
 from ..components.payments import service as payment_service
+from ..components.wallet import service as wallet_service
 from ..components.orders.schemas import (
     AddressBody,
     ConfirmPaymentBody,
     CancelOrderBody,
     PlaceOrderBody,
+    TopUpBody,
     QuoteBody,
     ReviewOrderBody,
     RiderReviewBody,
@@ -278,6 +280,41 @@ async def delete_account(user: CurrentUser = Depends(customer_only)):
     await profile_service.delete_account(user.id)
 
     return {"ok": True}
+
+
+# --- Foodos wallet ---------------------------------------------------------
+
+
+@router.get("/wallet")
+async def get_wallet(
+    limit: int = Query(default=30, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    user: CurrentUser = Depends(customer_only),
+):
+    return {"ok": True, **await wallet_service.get_wallet(user.id, limit, offset)}
+
+
+@router.post("/wallet/topup")
+async def start_topup(body: TopUpBody, user: CurrentUser = Depends(customer_only)):
+    """Creates the Razorpay order the app opens checkout against."""
+    return {"ok": True, "payment": await wallet_service.start_topup(user.id, body.amountPaise)}
+
+
+@router.post("/wallet/topup/confirm")
+async def confirm_topup(body: ConfirmPaymentBody, user: CurrentUser = Depends(customer_only)):
+    """Credits the wallet, but only if Razorpay's signature checks out."""
+    return {
+        "ok": True,
+        **await wallet_service.confirm_topup(
+            user.id, body.razorpayOrderId, body.razorpayPaymentId, body.razorpaySignature
+        ),
+    }
+
+
+@router.get("/wallet/balance")
+async def wallet_balance(user: CurrentUser = Depends(customer_only)):
+    """Checked when checkout closed before the app could confirm."""
+    return {"ok": True, **await wallet_service.topup_status(user.id)}
 
 
 # --- Reviews ---------------------------------------------------------------

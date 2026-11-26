@@ -3,7 +3,8 @@
 The rider collects the bill at the door, and that money is Foodos's. It counts
 as in hand from the moment the order is delivered until it is either handed
 over (a deposit an admin records) or settled in a payout, which takes the cash
-off the rider's pay for those days.
+off the rider's pay. A paid payout settles the cash rows in it, and, as with
+the payouts recorded by hand before automatic payouts, every day it covers.
 
 Once a rider holds `rider_cash_limit_paise`, dispatch offers them only prepaid
 orders until they deposit the cash, as Swiggy and Zomato do. A rider never
@@ -26,6 +27,15 @@ def _unpaid(partner: str, day: str) -> str:
     )"""
 
 
+def _settled_entry(source: str) -> str:
+    """True when the ledger row for this cash is in a paid payout: the cash
+    was taken off (or, for a deposit, added back to) the rider's pay."""
+    return f"""exists (
+        select 1 from earnings_entries e join payouts y on y.id = e.payout_id
+        where e.source = {source} and y.status = 'paid'
+    )"""
+
+
 def in_hand_sql(partner: str) -> str:
     """SQL for the cash, in paise, the rider `partner` (a column or a
     parameter) holds right now."""
@@ -34,10 +44,12 @@ def in_hand_sql(partner: str) -> str:
           select sum(o.total_paise) from deliveries d join orders o on o.id = d.order_id
           where d.partner_id = {partner} and d.status = 'delivered' and o.payment_method = 'cod'
             and {_unpaid(partner, 'd.delivered_at::date')}
+            and not {_settled_entry("'order:' || o.id || ':cash'")}
         ), 0)
         - coalesce((
           select sum(c.amount_paise) from rider_cash_deposits c
           where c.partner_id = {partner} and {_unpaid(partner, 'c.created_at::date')}
+            and not {_settled_entry("'deposit:' || c.id")}
         ), 0)
     )::bigint"""
 

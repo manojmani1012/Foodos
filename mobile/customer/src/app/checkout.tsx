@@ -1,5 +1,5 @@
 import { Feather } from '@expo/vector-icons'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
@@ -15,7 +15,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { useCart } from '@/lib/CartContext'
 import { useLocation } from '@/lib/LocationContext'
-import { formatMoney } from '@/lib/catalogue'
+import { formatMoney, rupees } from '@/lib/catalogue'
 import {
   DELIVERY_PREFERENCES,
   formatAddress,
@@ -25,12 +25,14 @@ import {
   quoteCart,
   type Quote,
 } from '@/lib/orders'
+import { fetchWalletBalance } from '@/lib/wallet'
 import { colors, radius, shadow, space, type } from '@/theme'
 
 import { Header } from './cart'
 
-// UPI and card go through Razorpay; cash skips it entirely. The wallet stays
-// disabled until top-ups exist, since a balance nobody can add to is useless.
+// UPI and card go through Razorpay; cash skips it entirely. The wallet is
+// charged on the server when the order is placed, and is chosen only when its
+// balance covers the whole bill.
 const METHODS = [
   {
     id: 'upi',
@@ -53,7 +55,6 @@ const METHODS = [
     icon: 'dollar-sign',
     enabled: true,
   },
-  { id: 'wallet', label: 'Foodos wallet', hint: 'Coming soon', icon: 'briefcase', enabled: false },
 ] as const
 
 // Tip amounts in rupees, like Swiggy and Zomato offer.
@@ -66,7 +67,8 @@ export default function CheckoutScreen() {
   const location = useLocation()
   const { coupon } = useLocalSearchParams<{ coupon?: string }>()
 
-  const [method, setMethod] = useState<'upi' | 'card' | 'cod'>('upi')
+  const [method, setMethod] = useState<'upi' | 'card' | 'cod' | 'wallet'>('upi')
+  const [walletPaise, setWalletPaise] = useState<number | null>(null)
   const [quote, setQuote] = useState<Quote | null>(null)
   const [tip, setTip] = useState(0)
   const [placing, setPlacing] = useState(false)
@@ -95,6 +97,37 @@ export default function CheckoutScreen() {
   useEffect(() => {
     price()
   }, [price])
+
+  // Back from topping up: the new balance shows straight away.
+  useFocusEffect(
+    useCallback(() => {
+      fetchWalletBalance()
+        .then(setWalletPaise)
+        .catch(() => setWalletPaise(null))
+    }, []),
+  )
+
+  // The wallet pays the whole bill or nothing, so it is only chosen when the
+  // balance covers the total.
+  const walletShort = walletPaise !== null && !!quote && walletPaise < quote.total * 100
+  const walletOption = {
+    id: 'wallet',
+    label: 'Foodos wallet',
+    hint:
+      walletPaise === null
+        ? 'Pay from your Foodos balance'
+        : walletShort
+          ? `Balance ${formatMoney(rupees(walletPaise))}. Add money to use it`
+          : `Balance ${formatMoney(rupees(walletPaise))}`,
+    icon: 'briefcase',
+    enabled: walletPaise !== null && !walletShort,
+  } as const
+  const options = [...METHODS, walletOption]
+
+  // A wallet that no longer covers the bill cannot stay chosen.
+  useEffect(() => {
+    if (method === 'wallet' && !walletOption.enabled) setMethod('upi')
+  }, [method, walletOption.enabled])
 
   if (cart.lines.length === 0) {
     return (
@@ -138,7 +171,8 @@ export default function CheckoutScreen() {
       // The order lives on the server now, so the local basket is done.
       cart.clear()
 
-      if (method === 'cod') {
+      // Cash and the wallet need no payment step: the order is confirmed.
+      if (method === 'cod' || method === 'wallet') {
         router.replace({ pathname: '/order/[id]', params: { id: order.id } })
         return
       }
@@ -226,7 +260,7 @@ export default function CheckoutScreen() {
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Payment</Text>
 
-            {METHODS.map(option => {
+            {options.map(option => {
               const selected = option.id === method
 
               return (
@@ -238,7 +272,7 @@ export default function CheckoutScreen() {
                     selected && styles.methodSelected,
                   ]}
                   disabled={!option.enabled}
-                  onPress={() => setMethod(option.id as 'upi' | 'card' | 'cod')}
+                  onPress={() => setMethod(option.id as 'upi' | 'card' | 'cod' | 'wallet')}
                 >
                   <View style={styles.methodIcon}>
                     <Feather
@@ -259,6 +293,10 @@ export default function CheckoutScreen() {
                 </Pressable>
               )
             })}
+
+            <Pressable onPress={() => router.push('/wallet')} hitSlop={8}>
+              <Text style={styles.link}>{walletShort ? 'Add money to your wallet' : 'Open your wallet'}</Text>
+            </Pressable>
           </View>
 
           <View style={styles.card}>
@@ -336,7 +374,7 @@ export default function CheckoutScreen() {
       <View style={[styles.bar, { paddingBottom: space.md + insets.bottom }]}>
         <View style={styles.flex}>
           <Text style={styles.barLabel}>
-            {method === 'cod' ? 'Pay on delivery' : 'Pay now'}
+            {method === 'cod' ? 'Pay on delivery' : method === 'wallet' ? 'Pay from wallet' : 'Pay now'}
           </Text>
           <Text style={styles.barValue}>{quote ? formatMoney(quote.total) : '—'}</Text>
         </View>
@@ -349,7 +387,7 @@ export default function CheckoutScreen() {
             <ActivityIndicator color={colors.surface} size="small" />
           ) : (
             <Text style={styles.barButtonText}>
-              {method === 'cod' ? 'Place order' : 'Pay & place order'}
+              {method === 'cod' || method === 'wallet' ? 'Place order' : 'Pay & place order'}
             </Text>
           )}
         </Pressable>

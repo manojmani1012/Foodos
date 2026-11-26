@@ -12,6 +12,7 @@ from typing import Optional
 from ...database import fetch, fetchrow, fetchval, transaction
 from ...errors import forbidden, not_found
 from ..auth.tokens import revoke_all_sessions_for_user
+from ..wallet import service as wallet
 from . import audit
 
 
@@ -134,9 +135,11 @@ async def get_customer(customer_id: str) -> dict:
     )
 
     roles = list(row["roles"])
+    wallet_state = await wallet.get_wallet(identifier, limit=15)
 
     return {
         "id": str(row["id"]),
+        "wallet": {"balancePaise": wallet_state["balancePaise"], "transactions": wallet_state["transactions"]},
         "name": row["full_name"],
         "phone": row["phone"],
         "email": row["email"],
@@ -175,6 +178,27 @@ async def get_customer(customer_id: str) -> dict:
             for o in recent
         ],
     }
+
+
+async def adjust_wallet(
+    customer_id: str, kind: str, amount_paise: int, reason: str, actor_id: uuid.UUID, ip: Optional[str]
+) -> dict:
+    """Foodos adding to or taking from a wallet: a goodwill credit, or putting
+    right a mistake. The reason is kept in the ledger and the activity log."""
+    identifier = as_uuid(customer_id)
+    balance = await wallet.adjust(identifier, kind, amount_paise, reason.strip(), actor_id)
+
+    await audit.record(
+        actor_id,
+        f"wallet_{kind}",
+        "Customers",
+        "user",
+        identifier,
+        {"amountPaise": amount_paise, "reason": reason.strip(), "balanceAfterPaise": balance},
+        ip,
+    )
+
+    return {"balancePaise": balance}
 
 
 async def set_blocked(

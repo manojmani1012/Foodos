@@ -13,7 +13,9 @@ const NAV = [
   { to: '/customers', label: 'Customers' },
   { to: '/offers', label: 'Offers' },
   { to: '/payouts', label: 'Payouts' },
+  { to: '/support', label: 'Support' },
   { to: '/activity', label: 'Activity log' },
+  { to: '/settings', label: 'Settings' },
 ]
 
 export default function Layout() {
@@ -32,6 +34,7 @@ export default function Layout() {
           waiting.attention.waitingForRider.length,
         '/restaurants': waiting.restaurants.pending,
         '/riders': waiting.riders.pending,
+        '/support': waiting.support?.waiting ?? 0,
       }
     : {}
 

@@ -84,12 +84,18 @@ export default function ProfileScreen() {
       onPress: () => router.push('/settings'),
     },
     {
+      icon: 'briefcase',
+      label: 'Foodos wallet',
+      hint: 'Add money and pay faster',
+      onPress: () => router.push('/wallet'),
+    },
+    {
       icon: 'credit-card',
       label: 'Payment methods',
       hint: 'UPI, cards and cash on delivery',
       disabled: true,
     },
-    { icon: 'help-circle', label: 'Help & support', hint: 'Coming soon', disabled: true },
+    { icon: 'help-circle', label: 'Help & support', onPress: () => router.push('/help') },
   ]
 
   const displayName = profile?.fullName || user?.fullName || 'Add your name'

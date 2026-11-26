@@ -12,6 +12,9 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 
+from ..components.payouts import finance, ledger, schedule
+from ..components.payouts import settings as payment_settings
+
 from ..components.admin import (
     assignment,
     audit,
@@ -22,6 +25,7 @@ from ..components.admin import (
     payouts,
     restaurants,
     riders,
+    support,
     targets,
 )
 from ..components.admin.schemas import (
@@ -32,17 +36,27 @@ from ..components.admin.schemas import (
     CreateOfferBody,
     CreateRestaurantBody,
     CreateTargetBody,
-    RecordPayoutBody,
+    AdjustmentBody,
+    HolidayBody,
+    IncludeExcludedBody,
+    PartialRefundBody,
+    PayoutPaidBody,
+    PayoutReasonBody,
+    PayoutRescheduleBody,
     ReviewDocumentBody,
     RestaurantStatusBody,
     RiderStatusBody,
+    SupportReplyBody,
     TestAccountBody,
+    TicketStatusBody,
+    WalletAdjustBody,
     UpdateOfferBody,
     UpdateRestaurantBody,
     UpdateRiderBody,
 )
 from ..components.auth.dependencies import CurrentUser, require_role
 from ..components.delivery import documents as rider_documents
+from ..components.payouts.accounts import VerifyAccountBody
 from ..components.orders import invoice
 from ..errors import not_found
 
@@ -111,6 +125,13 @@ async def set_restaurant_status(
     restaurant_id: str, body: RestaurantStatusBody, actor: Actor = Depends(acting_admin)
 ):
     restaurant = await restaurants.set_status(restaurant_id, body.status, body.reason, actor.id, actor.ip)
+
+    return {"ok": True, "restaurant": restaurant}
+
+
+@router.post("/restaurants/{restaurant_id}/payout-account/verify")
+async def verify_payout_account(restaurant_id: str, body: VerifyAccountBody, actor: Actor = Depends(acting_admin)):
+    restaurant = await restaurants.verify_payout_account(restaurant_id, body.approve, body.reason, actor.id, actor.ip)
 
     return {"ok": True, "restaurant": restaurant}
 
@@ -253,6 +274,13 @@ async def assign_rider(order_id: str, body: AssignRiderBody, actor: Actor = Depe
     return {"ok": True, "order": await orders.get_order(order_id)}
 
 
+@router.post("/orders/{order_id}/refunds")
+async def partial_refund(order_id: str, body: PartialRefundBody, actor: Actor = Depends(acting_admin)):
+    order = await orders.partial_refund(order_id, body.amountPaise, body.reason, body.chargedTo, actor.id, actor.ip)
+
+    return {"ok": True, "order": order}
+
+
 @router.post("/orders/{order_id}/refund")
 async def retry_refund(order_id: str, actor: Actor = Depends(acting_admin)):
     return {"ok": True, "order": await orders.retry_refund(order_id, actor.id, actor.ip)}
@@ -282,6 +310,14 @@ async def block_customer(customer_id: str, body: BlockCustomerBody, actor: Actor
     customer = await customers.set_blocked(customer_id, body.blocked, body.reason, actor.id, actor.ip)
 
     return {"ok": True, "customer": customer}
+
+
+@router.post("/customers/{customer_id}/wallet")
+async def adjust_wallet(customer_id: str, body: WalletAdjustBody, actor: Actor = Depends(acting_admin)):
+    return {
+        "ok": True,
+        **await customers.adjust_wallet(customer_id, body.type, body.amountPaise, body.reason, actor.id, actor.ip),
+    }
 
 
 @router.post("/accounts/{user_id}/test")
@@ -330,9 +366,169 @@ async def payout_history(
     return {"ok": True, **await payouts.history(party, limit, offset)}
 
 
-@router.post("/payouts", status_code=201)
-async def record_payout(body: RecordPayoutBody, actor: Actor = Depends(acting_admin)):
-    return {"ok": True, **await payouts.record(body, actor.id, actor.ip)}
+# Recording a payout by hand (POST /payouts) is gone: payouts are now made on
+# the schedule from the earnings ledger, and a hand-made one would pay twice.
+# The statement above stays as a read-only report.
+
+
+# --- Finance: payment settings, payouts on schedule, reports ---------------
+
+
+@router.get("/finance/settings")
+async def get_payment_settings(user: CurrentUser = Depends(admin_only)):
+    return {"ok": True, **await payment_settings.get_all()}
+
+
+@router.put("/finance/settings")
+async def save_payment_settings(body: payment_settings.PaymentSettings, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, **await payment_settings.save(body, actor.id, actor.ip)}
+
+
+@router.post("/finance/holidays")
+async def add_holiday(body: HolidayBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, **await payment_settings.add_holiday(body.day, body.name, actor.id, actor.ip)}
+
+
+@router.delete("/finance/holidays/{day}")
+async def remove_holiday(day: datetime.date, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, **await payment_settings.remove_holiday(day, actor.id, actor.ip)}
+
+
+@router.get("/finance/overview")
+async def finance_overview(
+    dateFrom: Optional[datetime.date] = None,
+    dateTo: Optional[datetime.date] = None,
+    user: CurrentUser = Depends(admin_only),
+):
+    return {"ok": True, **await finance.overview(dateFrom, dateTo)}
+
+
+@router.get("/finance/payouts")
+async def finance_payouts(
+    status: Optional[Literal["scheduled", "on_hold", "failed", "paid", "cancelled", "all"]] = None,
+    party: Optional[Literal["restaurant", "delivery_partner"]] = None,
+    search: Optional[str] = Query(default=None, max_length=80),
+    limit: int = Page,
+    offset: int = Offset,
+    user: CurrentUser = Depends(admin_only),
+):
+    return {"ok": True, **await finance.list_payouts(status, party, search, limit, offset)}
+
+
+@router.get("/finance/payouts/{payout_id}")
+async def finance_payout(payout_id: str, user: CurrentUser = Depends(admin_only)):
+    return {"ok": True, "payout": await finance.payout_detail(payout_id)}
+
+
+@router.post("/finance/payouts/{payout_id}/hold")
+async def hold_payout(payout_id: str, body: PayoutReasonBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "payout": await schedule.act(payout_id, "hold", actor.id, actor.ip, reason=body.reason)}
+
+
+@router.post("/finance/payouts/{payout_id}/release")
+async def release_payout(payout_id: str, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "payout": await schedule.act(payout_id, "release", actor.id, actor.ip)}
+
+
+@router.post("/finance/payouts/{payout_id}/reschedule")
+async def reschedule_payout(payout_id: str, body: PayoutRescheduleBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "payout": await schedule.act(payout_id, "reschedule", actor.id, actor.ip, date=body.date)}
+
+
+@router.post("/finance/payouts/{payout_id}/paid")
+async def mark_payout_paid(payout_id: str, body: PayoutPaidBody, actor: Actor = Depends(acting_admin)):
+    return {
+        "ok": True,
+        "payout": await schedule.act(payout_id, "paid", actor.id, actor.ip, reference=body.reference),
+    }
+
+
+@router.post("/finance/payouts/{payout_id}/failed")
+async def mark_payout_failed(payout_id: str, body: PayoutReasonBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "payout": await schedule.act(payout_id, "failed", actor.id, actor.ip, reason=body.reason)}
+
+
+@router.post("/finance/payouts/{payout_id}/retry")
+async def retry_payout(payout_id: str, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "payout": await schedule.act(payout_id, "retry", actor.id, actor.ip)}
+
+
+@router.post("/finance/payouts/{payout_id}/cancel")
+async def cancel_payout(payout_id: str, body: PayoutReasonBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "payout": await schedule.act(payout_id, "cancel", actor.id, actor.ip, reason=body.reason)}
+
+
+@router.post("/finance/run")
+async def run_payouts(actor: Actor = Depends(acting_admin)):
+    """The sweeper and the scheduler, now, instead of waiting for the loop."""
+    return {"ok": True, "created": await finance.run_now()}
+
+
+@router.get("/finance/unpaid")
+async def unpaid_earnings(
+    party: Optional[Literal["restaurant", "delivery_partner"]] = None, user: CurrentUser = Depends(admin_only)
+):
+    return {"ok": True, **await finance.unpaid(party)}
+
+
+@router.post("/finance/adjustments", status_code=201)
+async def add_adjustment(body: AdjustmentBody, actor: Actor = Depends(acting_admin)):
+    entry = await ledger.add_adjustment(body.partyType, body.partyId, body.amountPaise, body.note, actor.id, actor.ip)
+
+    return {"ok": True, "entry": entry}
+
+
+@router.post("/finance/include-excluded")
+async def include_excluded(body: Optional[IncludeExcludedBody] = None, actor: Actor = Depends(acting_admin)):
+    body = body or IncludeExcludedBody()
+    included = await ledger.include_excluded(body.partyType, body.partyId, actor.id, actor.ip)
+
+    return {"ok": True, "included": included}
+
+
+@router.get("/finance/reports/{kind}.csv")
+async def finance_report(
+    kind: Literal["collections", "payouts", "ledger", "commission"],
+    dateFrom: Optional[datetime.date] = None,
+    dateTo: Optional[datetime.date] = None,
+    user: CurrentUser = Depends(admin_only),
+):
+    filename, text = await finance.report(kind, dateFrom, dateTo)
+
+    return Response(
+        content=text.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "private, no-store"},
+    )
+
+
+# --- Support tickets -------------------------------------------------------
+
+
+@router.get("/support/tickets")
+async def list_support_tickets(
+    status: Optional[Literal["waiting", "open", "in_progress", "resolved", "closed"]] = None,
+    search: Optional[str] = Query(default=None, max_length=80),
+    limit: int = Page,
+    offset: int = Offset,
+    user: CurrentUser = Depends(admin_only),
+):
+    return {"ok": True, **await support.list_tickets(status, search, limit, offset)}
+
+
+@router.get("/support/tickets/{ticket_id}")
+async def get_support_ticket(ticket_id: str, user: CurrentUser = Depends(admin_only)):
+    return {"ok": True, "ticket": await support.get_ticket(ticket_id)}
+
+
+@router.post("/support/tickets/{ticket_id}/messages")
+async def reply_to_ticket(ticket_id: str, body: SupportReplyBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "ticket": await support.reply(ticket_id, actor.id, body.message, body.internal)}
+
+
+@router.post("/support/tickets/{ticket_id}/status")
+async def set_ticket_status(ticket_id: str, body: TicketStatusBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "ticket": await support.set_status(ticket_id, body.status, actor.id, actor.ip)}
 
 
 # --- Activity log ----------------------------------------------------------

@@ -20,6 +20,7 @@ from ..media import service as media
 from ..delivery import service as delivery
 from ..notifications import events
 from ..orders.notes import kitchen_note
+from ..payouts import settings as payment_settings
 from ..payments import refunds
 
 # What the restaurant is allowed to do, and from where. The customer places the
@@ -51,7 +52,7 @@ async def resolve_owned_restaurant(user_id: uuid.UUID) -> Any:
         """
         select id, name, description, cuisines, address_line, city, phone, image_url,
                is_veg, rating, rating_count, status, is_accepting_orders,
-               avg_prep_minutes, commission_pct, opens_at, closes_at, created_at, latitude, longitude
+               avg_prep_minutes, commission_pct, commission_plan, opens_at, closes_at, created_at, latitude, longitude
         from restaurants
         where owner_id = $1
         order by created_at
@@ -86,6 +87,8 @@ def restaurant_to_dict(row: Any) -> dict:
         "isAcceptingOrders": row["is_accepting_orders"],
         "avgPrepMinutes": row["avg_prep_minutes"],
         "commissionPct": float(row["commission_pct"]),
+        # 'standard', 'subscription' or 'custom' (a rate agreed with Foodos).
+        "commissionPlan": row["commission_plan"],
         "opensAt": row["opens_at"].isoformat() if row["opens_at"] else None,
         "closesAt": row["closes_at"].isoformat() if row["closes_at"] else None,
         # Customers only see restaurants pinned on the map.
@@ -105,7 +108,7 @@ async def set_accepting_orders(restaurant_id: Any, accepting: bool) -> dict:
         where id = $1
         returning id, name, description, cuisines, address_line, city, phone, image_url,
                   is_veg, rating, rating_count, status, is_accepting_orders,
-                  avg_prep_minutes, commission_pct, opens_at, closes_at, latitude, longitude
+                  avg_prep_minutes, commission_pct, commission_plan, opens_at, closes_at, latitude, longitude
         """,
         restaurant_id,
         accepting,
@@ -532,7 +535,7 @@ async def mark_ready(restaurant_id: Any, order_id: str, user_id: uuid.UUID) -> d
 RESTAURANT_COLUMNS = """
     id, name, description, cuisines, address_line, city, phone, image_url,
     is_veg, rating, rating_count, status, is_accepting_orders,
-    avg_prep_minutes, commission_pct, opens_at, closes_at, latitude, longitude
+    avg_prep_minutes, commission_pct, commission_plan, opens_at, closes_at, latitude, longitude
 """
 
 
@@ -689,15 +692,22 @@ async def earnings(restaurant_id: Any, commission_pct: float, days: int) -> dict
     )
 
     rate = commission_pct / 100
+    settings = payment_settings.current()
 
     def share(food: int, packaging: int) -> dict:
         commission = round(food * rate)
+        # GST on the commission and TDS, at the rates in the payment
+        # settings (0 until Foodos's accountant sets them).
+        gst = payment_settings.percent_of(commission, settings["gstOnCommissionPct"])
+        tds = payment_settings.percent_of(int(food + packaging), settings["restaurantTdsPct"])
 
         return {
             "foodPaise": int(food),
             "packagingPaise": int(packaging),
             "commissionPaise": commission,
-            "earningsPaise": int(food + packaging - commission),
+            "gstOnCommissionPaise": gst,
+            "tdsPaise": tds,
+            "earningsPaise": int(food + packaging - commission - gst - tds),
         }
 
     daily = [

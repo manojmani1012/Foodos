@@ -7,7 +7,7 @@ import { useLoad } from '../lib/useLoad'
 import { useFilters } from '../lib/useParams'
 
 const LIMIT = 50
-const MODULES = ['all', 'Orders', 'Restaurants', 'Riders', 'Customers', 'Offers', 'Payouts', 'Auth'] as const
+const MODULES = ['all', 'Orders', 'Restaurants', 'Riders', 'Customers', 'Offers', 'Payouts', 'Settings', 'Support', 'Auth'] as const
 
 const LINKS: Record<string, string> = {
   order: '/orders/',
@@ -15,6 +15,7 @@ const LINKS: Record<string, string> = {
   rider: '/riders/',
   delivery_partner: '/riders/',
   customer: '/customers/',
+  payout: '/payouts/',
 }
 
 function describe(row: ActivityRow) {

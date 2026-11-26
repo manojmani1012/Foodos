@@ -161,7 +161,9 @@ export type Order = {
   lateNight: boolean
   cancellationReason: string | null
   // Set when a paid order was cancelled: the money going back to the customer.
-  refund: { status: 'pending' | 'processed' | 'failed'; amount: number } | null
+  // Also set when Foodos refunds part of a delivered order.
+  // `destination`: back to the card/UPI paid with, or into the Foodos wallet.
+  refund: { status: 'pending' | 'processed' | 'failed'; amount: number; destination: 'original' | 'wallet' } | null
   // The rider, once one is assigned. Phone and position only while the order is
   // on its way.
   delivery: Tracking | null
@@ -223,7 +225,13 @@ export function mapOrder(api: any): Order {
     deliveryCode: api.deliveryCode ?? null,
     lateNight: !!api.lateNight,
     cancellationReason: api.cancellationReason,
-    refund: api.refund ? { status: api.refund.status, amount: rupees(api.refund.amountPaise) } : null,
+    refund: api.refund
+      ? {
+          status: api.refund.status,
+          amount: rupees(api.refund.amountPaise),
+          destination: api.refund.destination === 'wallet' || api.paymentMethod === 'wallet' ? 'wallet' : 'original',
+        }
+      : null,
     delivery: api.delivery ?? null,
     timeline: api.timeline || [],
     cookingInstructions: api.cookingInstructions ?? null,

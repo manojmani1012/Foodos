@@ -4,7 +4,9 @@ import MapPicker from '../components/Map'
 import { Card, ErrorBox, Field, PageHeader, Spinner } from '../components/ui'
 import { api, ApiError } from '../lib/api'
 import { useToast } from '../lib/toast'
-import type { Restaurant } from '../lib/types'
+import type { PaymentSettings, Restaurant } from '../lib/types'
+
+type Plan = 'standard' | 'subscription' | 'custom'
 
 type Form = {
   ownerPhone: string
@@ -19,6 +21,7 @@ type Form = {
   isVeg: boolean
   fssaiNumber: string
   gstNumber: string
+  commissionPlan: Plan
   commissionPct: string
   avgPrepMinutes: string
   deliveryRadiusKm: string
@@ -38,7 +41,8 @@ const EMPTY: Form = {
   isVeg: false,
   fssaiNumber: '',
   gstNumber: '',
-  commissionPct: '20',
+  commissionPlan: 'standard',
+  commissionPct: '22',
   avgPrepMinutes: '30',
   deliveryRadiusKm: '',
   location: null,
@@ -58,6 +62,7 @@ function fromRestaurant(restaurant: Restaurant): Form {
     isVeg: restaurant.isVeg,
     fssaiNumber: restaurant.fssaiNumber || '',
     gstNumber: restaurant.gstNumber || '',
+    commissionPlan: restaurant.commissionPlan || 'custom',
     commissionPct: String(restaurant.commissionPct),
     avgPrepMinutes: String(restaurant.avgPrepMinutes),
     deliveryRadiusKm: restaurant.deliveryRadiusKm !== null ? String(restaurant.deliveryRadiusKm) : '',
@@ -80,6 +85,14 @@ export default function RestaurantForm() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const [rates, setRates] = useState<Pick<PaymentSettings, 'commissionStandardPct' | 'commissionSubscriptionPct'> | null>(null)
+
+  // The plan rates come from Settings; only shown as a hint, so a failure is ignored.
+  useEffect(() => {
+    api<{ settings: PaymentSettings }>('/api/v1/admin/finance/settings')
+      .then(({ settings }) => setRates(settings))
+      .catch(() => setRates(null))
+  }, [])
 
   useEffect(() => {
     if (!id) return
@@ -118,7 +131,7 @@ export default function RestaurantForm() {
       isVeg: form.isVeg,
       fssaiNumber: form.fssaiNumber.trim() || null,
       gstNumber: form.gstNumber.trim() || null,
-      commissionPct: Number(form.commissionPct),
+      commissionPlan: form.commissionPlan,
       avgPrepMinutes: Number(form.avgPrepMinutes),
       deliveryRadiusKm: form.deliveryRadiusKm.trim() ? Number(form.deliveryRadiusKm) : null,
       latitude: form.location.latitude,
@@ -126,6 +139,8 @@ export default function RestaurantForm() {
       ownerName: form.ownerName.trim(),
     }
 
+    // The plan rates follow Settings; a percentage is only sent for a custom rate.
+    if (form.commissionPlan === 'custom') body.commissionPct = Number(form.commissionPct)
     if (!editing) body.ownerPhone = form.ownerPhone.trim()
 
     try {
@@ -250,11 +265,32 @@ export default function RestaurantForm() {
             <Field label="GSTIN" hint="Optional. 15 characters." error={fieldErrors.gstNumber}>
               {(fieldId) => <input id={fieldId} className="input" maxLength={15} value={form.gstNumber} onChange={(e) => set('gstNumber', e.target.value.toUpperCase())} />}
             </Field>
-            <Field label="Commission (%)" hint="Foodos's share of the food value on each delivered order." error={fieldErrors.commissionPct}>
+            <Field
+              label="Commission plan"
+              hint={
+                form.commissionPlan === 'standard'
+                  ? `Foodos takes ${rates ? `${rates.commissionStandardPct}%` : 'the standard rate'} of the food value, as set in Settings.`
+                  : form.commissionPlan === 'subscription'
+                    ? `Foodos takes ${rates ? `${rates.commissionSubscriptionPct}%` : 'the subscription rate'} of the food value, as set in Settings.`
+                    : 'A rate agreed with this restaurant. It does not change when Settings change.'
+              }
+              error={fieldErrors.commissionPlan}
+            >
               {(fieldId) => (
-                <input id={fieldId} className="input" type="number" min={0} max={100} step={0.5} value={form.commissionPct} onChange={(e) => set('commissionPct', e.target.value)} />
+                <select id={fieldId} className="input" value={form.commissionPlan} onChange={(e) => set('commissionPlan', e.target.value as Plan)}>
+                  <option value="standard">Standard{rates ? ` (${rates.commissionStandardPct}%)` : ''}</option>
+                  <option value="subscription">Subscription{rates ? ` (${rates.commissionSubscriptionPct}%)` : ''}</option>
+                  <option value="custom">Custom rate</option>
+                </select>
               )}
             </Field>
+            {form.commissionPlan === 'custom' && (
+              <Field label="Commission (%)" hint="Foodos's share of the food value on each delivered order." error={fieldErrors.commissionPct}>
+                {(fieldId) => (
+                  <input id={fieldId} className="input" type="number" min={0} max={100} step={0.5} value={form.commissionPct} onChange={(e) => set('commissionPct', e.target.value)} />
+                )}
+              </Field>
+            )}
             <Field label="Usual preparation time (minutes)" hint="Used for the delivery time customers see." error={fieldErrors.avgPrepMinutes}>
               {(fieldId) => (
                 <input id={fieldId} className="input" type="number" min={5} max={120} value={form.avgPrepMinutes} onChange={(e) => set('avgPrepMinutes', e.target.value)} />

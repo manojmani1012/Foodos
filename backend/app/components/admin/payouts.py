@@ -9,18 +9,18 @@ money in their pocket, plus any cash they handed over to Foodos in the period
 (so cash already deposited is not taken off their pay as well). A rider who
 kept more cash than they earned owes the difference, and the statement says so.
 
-The money itself moves outside Foodos (bank transfer or UPI). Recording a
-payout stores the amounts as they stood and the bank reference, and refuses a
-second payout for any day already paid, so nobody is paid twice.
+This is now a read-only report. Payouts themselves are made on the schedule
+from the earnings ledger (see components/payouts); the old screen that
+recorded a payout for any period by hand is gone, since it could pay the same
+orders a second time.
 """
 
 import datetime
 import uuid
 from typing import Any, Optional
 
-from ...database import fetch, fetchval, transaction
-from ...errors import bad_request, conflict, not_found
-from . import audit
+from ...database import fetch, fetchval
+from ...errors import bad_request
 
 PARTY_LABEL = {"restaurant": "Restaurants", "delivery_partner": "Riders"}
 MAX_PERIOD_DAYS = 92
@@ -227,92 +227,6 @@ async def statement(party_type: str, start: datetime.date, end: datetime.date) -
             "unpaidNetPaise": sum(line["netPaise"] for line in lines if not line["payout"]),
         },
     }
-
-
-async def record(body: Any, actor_id: uuid.UUID, ip: Optional[str]) -> dict:
-    party_type, start, end = body.partyType, body.periodStart, body.periodEnd
-    _check_period(start, end)
-
-    try:
-        party_id = uuid.UUID(body.partyId)
-    except ValueError:
-        raise not_found("party_not_found", "That partner could not be found")
-
-    async with transaction() as connection:
-        today = await connection.fetchval("select current_date")
-
-        if end >= today:
-            raise bad_request("period_not_over", "Payouts can only cover days that are over. End the period yesterday or earlier")
-
-        # One payout decision per partner at a time: two people pressing
-        # Record together cannot both get past the overlap check.
-        await connection.execute("select pg_advisory_xact_lock(hashtext($1))", f"payout:{party_id}")
-
-        column = "restaurant_id" if party_type == "restaurant" else "partner_id"
-        clash = await connection.fetchrow(
-            f"""
-            select period_start, period_end from payouts
-            where party_type = $1 and {column} = $2 and status = 'paid'
-              and period_start <= $4 and period_end >= $3
-            limit 1
-            """,
-            party_type,
-            party_id,
-            start,
-            end,
-        )
-
-        if clash is not None:
-            raise conflict(
-                "payout_overlaps",
-                f"Days from {clash['period_start'].isoformat()} to {clash['period_end'].isoformat()} are already paid",
-            )
-
-        lines = await (
-            _restaurant_lines(start, end, party_id) if party_type == "restaurant" else _rider_lines(start, end, party_id)
-        )
-
-        if not lines:
-            raise bad_request("nothing_to_pay", "Nothing was delivered in that period, so there is nothing to pay")
-
-        line = lines[0]
-
-        payout_id = await connection.fetchval(
-            f"""
-            insert into payouts
-              (party_type, {column}, period_start, period_end, gross_paise, commission_paise,
-               adjustments_paise, net_paise, status, payout_reference, paid_at)
-            values ($1, $2, $3, $4, $5, $6, $7, $8, 'paid', $9, now())
-            returning id
-            """,
-            party_type,
-            party_id,
-            start,
-            end,
-            line["grossPaise"],
-            line["commissionPaise"],
-            line["adjustmentsPaise"],
-            line["netPaise"],
-            body.reference,
-        )
-
-        await audit.record(
-            actor_id,
-            "Recorded payout",
-            "Payouts",
-            party_type,
-            party_id,
-            {
-                "name": line["name"],
-                "period": f"{start.isoformat()} to {end.isoformat()}",
-                "netPaise": line["netPaise"],
-                "reference": body.reference,
-            },
-            ip,
-            connection,
-        )
-
-    return {"payoutId": str(payout_id), "line": line}
 
 
 async def history(party_type: Optional[str], limit: int, offset: int) -> dict:

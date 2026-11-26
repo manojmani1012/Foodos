@@ -15,6 +15,7 @@ from ...config import get_settings
 from ...database import execute, fetchrow, transaction
 from ...errors import bad_request, conflict, not_found
 from ..notifications import events
+from ..wallet import service as wallet
 from . import razorpay
 from . import refunds
 
@@ -232,12 +233,25 @@ async def handle_webhook(body: bytes, signature: str) -> dict:
 
     async with transaction() as connection:
         payment = await connection.fetchrow(
-            "select id, order_id from payments where provider_order_id = $1",
+            "select id, order_id, user_id, amount_paise from payments where provider_order_id = $1 for update",
             razorpay_order_id,
         )
 
         if payment is None:
             return {"handled": False, "reason": "unknown payment"}
+
+        if payment["order_id"] is None:
+            # Adding money to the wallet, not paying for an order. The app's
+            # own confirmation may have credited it already; once is enough.
+            # `order.paid` carries the order's id, not a payment's.
+            paid_id = razorpay_payment_id if str(razorpay_payment_id).startswith("pay_") else None
+            await wallet.credit_topup(connection, payment, paid_id)
+            await connection.execute(
+                "update payment_webhook_events set processed_at = now() where provider = 'razorpay' and event_id = $1",
+                event_id,
+            )
+
+            return {"handled": True, "event": event_type, "topup": True}
 
         await connection.execute(
             "update payments set status = 'captured', provider_payment_id = coalesce($2, provider_payment_id) where id = $1",

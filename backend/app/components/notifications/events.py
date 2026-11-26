@@ -338,7 +338,10 @@ async def cancelled(
         refund = await refunds.refund_for_order(order_id)
 
         if refund and refund["status"] in ("pending", "processed"):
-            body += f" Your refund of {_rupees(refund['amountPaise'])} has been started."
+            if order["payment_method"] == "wallet":
+                body += f" {_rupees(refund['amountPaise'])} is back in your Foodos wallet."
+            else:
+                body += f" Your refund of {_rupees(refund['amountPaise'])} has been started."
 
         await push.notify([order["customer_id"]], "customer", "Order cancelled", body, _order_link(order))
 
@@ -368,3 +371,30 @@ async def cancelled(
             {"type": "offer"},
             urgent=True,
         )
+
+
+# --- Support ------------------------------------------------------------------
+
+# Which app a ticket was raised from, by the role its session had.
+SUPPORT_APP = {"customer": "customer", "restaurant_owner": "restaurant", "delivery_partner": "delivery"}
+
+
+@_quietly
+async def support_replied(ticket_id: uuid.UUID, message: str) -> None:
+    """Foodos answered a ticket; internal notes never come here."""
+    ticket = await fetchrow(
+        "select raised_by, raised_by_role, ticket_number from support_tickets where id = $1", ticket_id
+    )
+
+    if ticket is None:
+        return
+
+    preview = message if len(message) <= 120 else message[:117].rstrip() + "…"
+
+    await push.notify(
+        [ticket["raised_by"]],
+        SUPPORT_APP[ticket["raised_by_role"]],
+        f"Foodos support replied ({ticket['ticket_number']})",
+        preview,
+        {"type": "support", "ticketId": str(ticket_id)},
+    )

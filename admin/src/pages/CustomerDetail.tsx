@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Badge, Card, ConfirmDialog, Details, Loadable, PageHeader, Stat, StatusBadge } from '../components/ui'
+import { Badge, Card, ConfirmDialog, Details, ErrorBox, Field, Loadable, Modal, PageHeader, Stat, StatusBadge } from '../components/ui'
 import { api } from '../lib/api'
 import { formatDateTime, formatMoney, formatPhone, ORDER_STATUS, PAYMENT_METHOD, timeAgo } from '../lib/format'
 import { TestAccountCard, TestBadge } from '../components/TestAccount'
@@ -13,10 +13,92 @@ const ROLE_NAMES: Record<string, string> = {
   delivery_partner: 'rider',
 }
 
+// Foodos adding to or taking from a wallet: goodwill for a bad order, or
+// putting right a mistake. The reason is kept with the entry and in Activity.
+function AdjustWallet({ customer, onSaved, onClose }: { customer: Customer; onSaved: () => void; onClose: () => void }) {
+  const [kind, setKind] = useState<'credit' | 'debit'>('credit')
+  const [amount, setAmount] = useState('')
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function save(event?: FormEvent) {
+    event?.preventDefault()
+    const paise = Math.round(Number(amount) * 100)
+
+    if (!(paise >= 100)) {
+      setError('Enter the amount in rupees')
+      return
+    }
+
+    if (reason.trim().length < 5) {
+      setError('Say why. It is kept with the entry and shown to the customer')
+      return
+    }
+
+    setBusy(true)
+    setError('')
+
+    try {
+      await api(`/api/v1/admin/customers/${customer.id}/wallet`, {
+        method: 'POST',
+        body: { type: kind, amountPaise: paise, reason: reason.trim() },
+      })
+      onSaved()
+      onClose()
+    } catch (caught: any) {
+      setError(caught?.message || 'Could not change the wallet')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      title="Change wallet balance"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" onClick={() => save()} disabled={busy}>
+            {busy ? 'Saving…' : kind === 'credit' ? 'Add money' : 'Take money'}
+          </button>
+        </>
+      }
+    >
+      <form className="stack" onSubmit={save}>
+        <p className="muted small">
+          {customer.name || 'This customer'} has {formatMoney(customer.wallet.balancePaise)}. The reason appears in their wallet
+          history, so write it for them.
+        </p>
+        <div className="form-grid two">
+          <Field label="Change">
+            {(id) => (
+              <select id={id} className="input" value={kind} onChange={(e) => setKind(e.target.value as 'credit' | 'debit')}>
+                <option value="credit">Add money</option>
+                <option value="debit">Take money back</option>
+              </select>
+            )}
+          </Field>
+          <Field label="Amount (₹)">
+            {(id) => <input id={id} className="input" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />}
+          </Field>
+        </div>
+        <Field label="Reason">
+          {(id) => <input id={id} className="input" value={reason} maxLength={200} onChange={(e) => setReason(e.target.value)} />}
+        </Field>
+        {error && <ErrorBox error={error} />}
+      </form>
+    </Modal>
+  )
+}
+
 export default function CustomerDetail() {
   const { id = '' } = useParams()
   const toast = useToast()
   const [confirming, setConfirming] = useState(false)
+  const [adjusting, setAdjusting] = useState(false)
 
   const state = useLoad(async () => (await api<{ customer: Customer }>(`/api/v1/admin/customers/${id}`)).customer, id)
 
@@ -90,6 +172,37 @@ export default function CustomerDetail() {
                 )}
               </Card>
 
+              <Card
+                title="Foodos wallet"
+                actions={
+                  <button className="btn btn-small" onClick={() => setAdjusting(true)}>
+                    Change balance
+                  </button>
+                }
+              >
+                <p>
+                  <strong>{formatMoney(customer.wallet.balancePaise)}</strong>
+                </p>
+                {customer.wallet.transactions.length === 0 ? (
+                  <p className="muted">Nothing added or spent yet.</p>
+                ) : (
+                  <Details
+                    rows={customer.wallet.transactions.map((entry) => [
+                      formatDateTime(entry.createdAt),
+                      <div key={entry.id}>
+                        {entry.type === 'credit' ? '+' : '−'}
+                        {formatMoney(entry.amountPaise)} · {entry.label}
+                        {entry.orderNumber ? ` #${entry.orderNumber}` : ''}
+                        <div className="sub">
+                          Balance {formatMoney(entry.balanceAfterPaise)}
+                          {entry.note ? ` · ${entry.note}` : ''}
+                        </div>
+                      </div>,
+                    ])}
+                  />
+                )}
+              </Card>
+
               <TestAccountCard
                 userId={customer.id}
                 phone={customer.phone}
@@ -127,6 +240,17 @@ export default function CustomerDetail() {
                 )}
               </Card>
             </div>
+
+            {adjusting && (
+              <AdjustWallet
+                customer={customer}
+                onSaved={() => {
+                  state.reload()
+                  toast("Wallet updated")
+                }}
+                onClose={() => setAdjusting(false)}
+              />
+            )}
 
             {confirming && (
               <ConfirmDialog

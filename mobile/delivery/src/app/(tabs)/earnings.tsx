@@ -8,9 +8,24 @@ import {
   Text,
   View,
 } from 'react-native'
+import { Feather } from '@expo/vector-icons'
+import { useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
-import { fetchEarnings, fetchHistory, formatRupees, type Delivery, type Earnings } from '@/lib/delivery'
+import { PayoutBreakdown, PayoutStatusPill } from '@/components/PayoutBreakdown'
+import {
+  fetchEarnings,
+  fetchHistory,
+  fetchPayouts,
+  formatDay,
+  formatPeriod,
+  formatRupees,
+  PAYOUT_SCHEDULE_TEXT,
+  type Delivery,
+  type Earnings,
+  type PayoutSummary,
+  type Payouts,
+} from '@/lib/delivery'
 import { colors, radius, shadow, space, type } from '@/theme'
 
 const RANGES = [
@@ -20,14 +35,21 @@ const RANGES = [
 ]
 
 export default function EarningsScreen() {
+  const router = useRouter()
   const [days, setDays] = useState(7)
   const [earnings, setEarnings] = useState<Earnings | null>(null)
+  const [payouts, setPayouts] = useState<Payouts | null>(null)
   const [recent, setRecent] = useState<Delivery[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
 
   const load = useCallback(async (range: number) => {
+    // Payouts load on their own: if they fail, earnings still show.
+    fetchPayouts()
+      .then(setPayouts)
+      .catch(() => setPayouts(null))
+
     try {
       const [summary, history] = await Promise.all([fetchEarnings(range), fetchHistory()])
 
@@ -47,6 +69,9 @@ export default function EarningsScreen() {
   }, [days, load])
 
   const totals = earnings?.totals
+  const rule = earnings?.payRule
+  const openPayout = (payout: PayoutSummary) =>
+    router.push({ pathname: '/payout/[id]', params: { id: payout.id } })
   const busyDays = (earnings?.daily ?? []).filter(day => day.deliveries > 0).reverse()
 
   return (
@@ -100,12 +125,22 @@ export default function EarningsScreen() {
               </Text>
 
               <View style={styles.breakdown}>
-                <Line label="Delivery pay" value={formatRupees(totals.basePaise)} />
+                {totals.distancePaise != null ? (
+                  <>
+                    <Line label="Base pay" value={formatRupees(totals.basePaise)} />
+                    <Line label="Distance pay" value={formatRupees(totals.distancePaise)} />
+                  </>
+                ) : (
+                  <Line label="Delivery pay" value={formatRupees(totals.basePaise)} />
+                )}
+                <Line label="Incentives" value={formatRupees(totals.incentivePaise)} />
                 <Line label="Tips from customers" value={formatRupees(totals.tipsPaise)} />
-                {totals.incentivePaise > 0 ? (
-                  <Line label="Incentives" value={formatRupees(totals.incentivePaise)} />
-                ) : null}
               </View>
+              <Text style={styles.rule}>
+                {rule
+                  ? `How you are paid: ${formatRupees(rule.basePaise)} for the first ${rule.baseKm} km, ${formatRupees(rule.perKmPaise)} per km after that${rule.orderIncentivePaise > 0 ? `, ${formatRupees(rule.orderIncentivePaise)} bonus on every delivered order` : ''}, and every rupee of tips.`
+                  : 'How you are paid: base pay per delivery, distance pay per km, incentives, and every rupee of a customer tip.'}
+              </Text>
             </View>
           ) : null}
 
@@ -124,6 +159,8 @@ export default function EarningsScreen() {
               </Text>
             </View>
           ) : null}
+
+          {payouts ? <PayoutsSection payouts={payouts} onOpen={openPayout} /> : null}
 
           {days > 1 ? (
             <>
@@ -182,12 +219,115 @@ export default function EarningsScreen() {
           )}
 
           <Text style={styles.note}>
-            Pay is a base amount per delivery plus a rate per km, and every rupee of a customer tip is
-            yours. Payout dates are set in your agreement with Foodos.
+            {PAYOUT_SCHEDULE_TEXT} Foodos sends each payout and marks it paid here with the bank
+            reference (UTR).
           </Text>
         </ScrollView>
       )}
     </SafeAreaView>
+  )
+}
+
+function PayoutsSection({ payouts, onOpen }: { payouts: Payouts; onOpen: (payout: PayoutSummary) => void }) {
+  const { unpaid, upcoming, history } = payouts
+  const owes = unpaid.duePaise < 0
+
+  return (
+    <>
+      <Text style={styles.sectionTitle}>Not paid yet</Text>
+      <View style={[styles.hero, owes && styles.owes]}>
+        {owes ? (
+          <>
+            <Text style={[styles.heroLabel, styles.owesText]}>You owe Foodos</Text>
+            <Text style={[styles.dueValue, styles.owesText]}>{formatRupees(-unpaid.duePaise)}</Text>
+            <Text style={[styles.heroHint, styles.owesText]}>
+              For cash collected from customers. Hand it over to Foodos; your next earnings are set
+              against it first.
+            </Text>
+          </>
+        ) : (
+          <>
+            <Text style={styles.heroLabel}>Due to you</Text>
+            <Text style={styles.dueValue}>{formatRupees(unpaid.duePaise)}</Text>
+            <Text style={styles.heroHint}>
+              {unpaid.entryCount === 0
+                ? 'Nothing waiting. New earnings show here until they go into a payout.'
+                : unpaid.belowMinimum
+                  ? `Below the ${formatRupees(unpaid.minPayoutPaise)} minimum, so it is carried forward and added to your next payout.`
+                  : unpaid.nextPayDate
+                    ? `Goes into the payout on ${formatDay(unpaid.nextPayDate)}.`
+                    : 'Goes into your next payout.'}
+            </Text>
+          </>
+        )}
+        {unpaid.breakdown ? (
+          <View style={styles.breakdown}>
+            <PayoutBreakdown breakdown={unpaid.breakdown} />
+          </View>
+        ) : null}
+      </View>
+
+      {upcoming.length > 0 ? (
+        <>
+          <Text style={styles.sectionTitle}>Next payout</Text>
+          <View style={styles.card}>
+            {upcoming.map((payout, index) => (
+              <Pressable
+                key={payout.id}
+                style={[styles.row, index === upcoming.length - 1 && styles.rowLast]}
+                onPress={() => onOpen(payout)}
+              >
+                <View style={styles.flex}>
+                  <Text style={styles.rowTitle}>{formatDay(payout.scheduledFor)}</Text>
+                  <Text style={styles.rowHint}>For {formatPeriod(payout.periodStart, payout.periodEnd)}</Text>
+                  {payout.status === 'on_hold' && payout.holdReason ? (
+                    <Text style={styles.holdText}>On hold: {payout.holdReason}</Text>
+                  ) : null}
+                </View>
+                <View style={styles.rowEnd}>
+                  <Text style={styles.rowValue}>{formatRupees(payout.netPaise)}</Text>
+                  <PayoutStatusPill status={payout.status} />
+                </View>
+                <Feather name="chevron-right" size={18} color={colors.faint} />
+              </Pressable>
+            ))}
+          </View>
+        </>
+      ) : null}
+
+      <Text style={styles.sectionTitle}>Payout history</Text>
+      {history.length === 0 ? (
+        <Text style={styles.emptyText}>Your paid payouts will appear here.</Text>
+      ) : (
+        <View style={styles.card}>
+          {history.map((payout, index) => (
+            <Pressable
+              key={payout.id}
+              style={[styles.row, index === history.length - 1 && styles.rowLast]}
+              onPress={() => onOpen(payout)}
+            >
+              <View style={styles.flex}>
+                <Text style={styles.rowTitle}>
+                  {formatDay(payout.status === 'paid' && payout.paidAt ? payout.paidAt : payout.scheduledFor)}
+                </Text>
+                <Text style={styles.rowHint}>
+                  {payout.status === 'paid'
+                    ? `Paid${payout.reference ? ` · UTR ${payout.reference}` : ''}`
+                    : payout.status === 'failed'
+                      ? 'Failed: Foodos will retry'
+                      : formatPeriod(payout.periodStart, payout.periodEnd)}
+                </Text>
+              </View>
+              <View style={styles.rowEnd}>
+                <Text style={styles.rowValue}>{formatRupees(payout.netPaise)}</Text>
+                <PayoutStatusPill status={payout.status} />
+              </View>
+              <Feather name="chevron-right" size={18} color={colors.faint} />
+            </Pressable>
+          ))}
+        </View>
+      )}
+    </>
   )
 }
 
@@ -249,6 +389,13 @@ const styles = StyleSheet.create({
   line: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 },
   lineLabel: { ...type.small, color: colors.body },
   lineValue: { ...type.small, color: colors.ink },
+  rule: { ...type.caption, color: colors.muted, marginTop: space.md, lineHeight: 17 },
+
+  dueValue: { ...type.title, color: colors.ink, marginTop: space.xs },
+  owes: { backgroundColor: colors.dangerSoft, borderColor: colors.dangerSoft },
+  owesText: { color: colors.danger },
+  holdText: { ...type.caption, color: colors.warning, marginTop: 2 },
+  rowEnd: { alignItems: 'flex-end', gap: 4, marginRight: space.sm },
 
   cash: { marginTop: space.md, padding: space.lg, borderRadius: radius.lg, backgroundColor: colors.warningSoft },
   cashTitle: { ...type.overline, color: colors.warning },

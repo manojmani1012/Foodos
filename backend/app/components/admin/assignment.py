@@ -15,7 +15,8 @@ from typing import Optional
 from ...config import get_settings
 from ...database import fetch, fetchrow, transaction
 from ...errors import conflict, not_found
-from ..delivery.dispatch import ACTIVE, as_address, rider_pay, trip
+from ..delivery.dispatch import ACTIVE, as_address, order_incentive, trip
+from ..payouts import settings as payment_settings
 from ..notifications import events
 from . import audit
 
@@ -155,7 +156,7 @@ async def assign(order_id: str, rider_id: str, actor_id: uuid.UUID, ip: Optional
         delivery = await connection.fetchrow(
             """
             select d.id, d.status, d.partner_id, o.status as order_status, o.order_number, o.tip_paise,
-                   o.delivery_address, r.latitude, r.longitude
+                   o.delivery_address, o.is_test, r.latitude, r.longitude
             from deliveries d
             join orders o on o.id = d.order_id
             join restaurants r on r.id = o.restaurant_id
@@ -201,12 +202,14 @@ async def assign(order_id: str, rider_id: str, actor_id: uuid.UUID, ip: Optional
             as_address(delivery["delivery_address"]),
         )
 
+        base_pay, distance_pay = payment_settings.rider_pay_parts(total, drop)
+
         await connection.execute(
             """
             update deliveries
             set partner_id = $2, status = 'accepted', accepted_at = now(), reached_restaurant_at = null,
                 pickup_distance_km = $3, drop_distance_km = $4, total_distance_km = $5,
-                base_earning_paise = $6, tip_paise = $7
+                base_earning_paise = $6, tip_paise = $7, base_pay_paise = $8, distance_pay_paise = $9
             where id = $1
             """,
             delivery["id"],
@@ -214,8 +217,10 @@ async def assign(order_id: str, rider_id: str, actor_id: uuid.UUID, ip: Optional
             pickup,
             drop,
             total,
-            rider_pay(total),
+            base_pay + distance_pay,
             delivery["tip_paise"],
+            base_pay,
+            distance_pay,
         )
 
         # Whoever had it on screen loses the offer; the new rider's record shows
@@ -235,7 +240,7 @@ async def assign(order_id: str, rider_id: str, actor_id: uuid.UUID, ip: Optional
             """,
             delivery["id"],
             rider,
-            rider_pay(total) + delivery["tip_paise"],
+            base_pay + distance_pay + delivery["tip_paise"] + order_incentive(delivery["is_test"]),
         )
 
         await audit.record(

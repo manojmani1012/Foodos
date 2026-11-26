@@ -223,7 +223,8 @@ async def get_order(order_id: str) -> dict:
 
     refund_rows = await fetch(
         """
-        select f.status, f.amount_paise, f.reason, f.provider_refund_id, f.created_at, f.processed_at,
+        select f.id, f.status, f.amount_paise, f.reason, f.provider_refund_id, f.created_at, f.processed_at,
+               f.charged_to, f.destination,
                u.full_name as requested_by_name, u.email as requested_by_email
         from refunds f
         left join users u on u.id = f.requested_by
@@ -292,6 +293,9 @@ async def get_order(order_id: str) -> dict:
                 "requestedBy": f["requested_by_name"] or f["requested_by_email"],
                 "requestedAt": f["created_at"].isoformat(),
                 "processedAt": f["processed_at"].isoformat() if f["processed_at"] else None,
+                # Partial refunds say who bears them; a cancellation refund is null.
+                "chargedTo": f["charged_to"],
+                "destination": f["destination"],
             }
             for f in refund_rows
         ],
@@ -306,7 +310,13 @@ async def get_order(order_id: str) -> dict:
             "canRetryRefund": row["status"] == "cancelled"
             and captured
             and latest_refund in (None, "failed"),
+            # Part of a delivered order can be given back, up to what is left.
+            "canPartialRefund": row["status"] == "delivered"
+            and sum(f["amount_paise"] for f in refund_rows if f["status"] != "failed") < view["totalPaise"],
         },
+        "refundablePaise": view["totalPaise"] - sum(f["amount_paise"] for f in refund_rows if f["status"] != "failed")
+        if row["status"] == "delivered"
+        else 0,
     }
 
 
@@ -415,5 +425,15 @@ async def retry_refund(order_id: str, actor_id: uuid.UUID, ip: Optional[str]) ->
         {"orderNumber": detail["orderNumber"], "result": refund["status"] if refund else None},
         ip,
     )
+
+    return await get_order(str(identifier))
+
+
+async def partial_refund(
+    order_id: str, amount_paise: int, reason: str, charged_to: str, actor_id: uuid.UUID, ip: Optional[str]
+) -> dict:
+    """Gives back part of a delivered order (see payments/refunds.py)."""
+    identifier = as_uuid(order_id)
+    await refunds.partial_refund(identifier, amount_paise, reason, charged_to, actor_id, ip)
 
     return await get_order(str(identifier))

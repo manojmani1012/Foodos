@@ -101,11 +101,22 @@ export type Delivery = {
   deliveredAt: string | null
 }
 
+// The pay rule, when the server sends it (it is admin-editable, so the app
+// never hard-codes the numbers).
+export type PayRule = {
+  basePaise: number
+  baseKm: number
+  perKmPaise: number
+  orderIncentivePaise: number
+}
+
 export type Earnings = {
   days: number
   totals: {
     deliveries: number
+    // Older servers: basePaise is base + distance and distancePaise is absent.
     basePaise: number
+    distancePaise?: number
     incentivePaise: number
     tipsPaise: number
     earningsPaise: number
@@ -114,12 +125,144 @@ export type Earnings = {
   daily: {
     date: string
     deliveries: number
+    basePaise?: number
+    distancePaise?: number
+    incentivePaise?: number
     earningsPaise: number
     tipsPaise: number
     distanceKm: number
   }[]
   cashCollectedTodayPaise: number
   cash: CashInHand
+  payRule?: PayRule | null
+}
+
+// --- Payouts ---------------------------------------------------------------
+
+export type PayoutStatus = 'scheduled' | 'on_hold' | 'processing' | 'paid' | 'failed' | 'cancelled' | 'pending'
+
+// Every amount is the effect on what Foodos owes the rider: cash collected is
+// negative, cash handed over positive.
+export type PayoutBreakdown = {
+  basePaise?: number
+  distancePaise?: number
+  incentivePaise?: number
+  tipsPaise?: number
+  cashCollectedPaise?: number
+  cashDepositedPaise?: number
+  adjustmentsPaise?: number
+  refundsPaise?: number
+}
+
+export type PayoutSummary = {
+  id: string
+  status: PayoutStatus
+  scheduledFor: string | null
+  periodStart: string | null
+  periodEnd: string | null
+  grossPaise: number
+  commissionPaise: number
+  adjustmentsPaise: number
+  netPaise: number
+  reference: string | null
+  paidAt: string | null
+  holdReason: string | null
+  failureReason?: string | null
+  breakdown?: PayoutBreakdown
+}
+
+export type EntryKind = 'delivery' | 'cash_collected' | 'cash_deposit' | 'refund' | 'adjustment' | string
+
+export type PayoutEntry = {
+  id: number | string
+  kind: EntryKind
+  orderId: string | null
+  orderNumber: string | null
+  businessDate: string
+  amountPaise: number
+  breakdown: Record<string, unknown>
+  note: string | null
+  createdAt: string
+}
+
+export type Payouts = {
+  unpaid: {
+    duePaise: number
+    entryCount: number
+    nextPayDate: string | null
+    belowMinimum: boolean
+    minPayoutPaise: number
+    cashInHandPaise?: number
+    breakdown?: PayoutBreakdown
+  }
+  upcoming: PayoutSummary[]
+  history: PayoutSummary[]
+}
+
+export async function fetchPayouts(): Promise<Payouts> {
+  const { ok, ...payouts } = await request(`${BASE}/payouts`)
+
+  return {
+    unpaid: payouts.unpaid,
+    upcoming: payouts.upcoming ?? [],
+    history: payouts.history ?? [],
+  }
+}
+
+export async function fetchPayout(id: string): Promise<PayoutSummary & { entries: PayoutEntry[] }> {
+  const { payout } = await request(`${BASE}/payouts/${id}`)
+
+  return { ...payout, entries: payout.entries ?? [] }
+}
+
+// A short-lived link to a printable statement, opened in the phone's browser.
+export async function openPayoutStatement(id: string) {
+  const { url } = await request(`${BASE}/payouts/${id}/statement`, { method: 'POST' })
+
+  return Linking.openURL(url)
+}
+
+export const PAYOUT_STATUS: Record<string, { label: string; tone: 'good' | 'warn' | 'bad' | 'plain' }> = {
+  scheduled: { label: 'Scheduled', tone: 'plain' },
+  pending: { label: 'Pending', tone: 'plain' },
+  processing: { label: 'Being sent', tone: 'plain' },
+  on_hold: { label: 'On hold', tone: 'warn' },
+  paid: { label: 'Paid', tone: 'good' },
+  failed: { label: 'Failed', tone: 'bad' },
+  cancelled: { label: 'Cancelled', tone: 'plain' },
+}
+
+export const ENTRY_KIND: Record<string, string> = {
+  delivery: 'Delivery',
+  cash_collected: 'Cash collected',
+  cash_deposit: 'Cash handed over',
+  refund: 'Refund',
+  adjustment: 'Adjustment',
+}
+
+export const PAYOUT_SCHEDULE_TEXT =
+  'Mon–Tue earnings are paid on Thursday, Wed–Thu on Monday, Fri–Sun on Tuesday. A holiday moves it to the next working day.'
+
+// "Thu 21 Nov" from "2026-11-21" (a date with no time, so no timezone shift).
+export function formatDay(date: string | null | undefined, withYear = false): string {
+  if (!date) return '—'
+  // A full timestamp (paidAt) is shown in the phone's own time zone.
+  const [y, m, d] = date.slice(0, 10).split('-').map(Number)
+  const when = date.length > 10 ? new Date(date) : new Date(y, m - 1, d)
+
+  return when.toLocaleDateString('en-IN', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    ...(withYear ? { year: 'numeric' } : {}),
+  })
+}
+
+export function formatPeriod(start: string | null, end: string | null): string {
+  if (!start && !end) return ''
+  if (!start || start === end) return formatDay(end ?? start)
+
+  return `${formatDay(start)} – ${formatDay(end)}`
 }
 
 // --- The rider -------------------------------------------------------------

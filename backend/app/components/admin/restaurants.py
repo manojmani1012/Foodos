@@ -13,6 +13,8 @@ from typing import Any, Optional
 from ...database import fetch, fetchrow, fetchval, transaction
 from ...errors import bad_request, conflict, forbidden, not_found
 from ..auth.phone import normalize_phone
+from ..payouts import accounts as payout_accounts
+from ..payouts import settings as payment_settings
 from . import audit
 
 STATUSES = ("pending", "active", "suspended", "rejected")
@@ -31,7 +33,6 @@ COLUMNS = {
     "isVeg": "is_veg",
     "fssaiNumber": "fssai_number",
     "gstNumber": "gst_number",
-    "commissionPct": "commission_pct",
     "avgPrepMinutes": "avg_prep_minutes",
     "deliveryRadiusKm": "delivery_radius_km",
 }
@@ -222,6 +223,9 @@ async def get_restaurant(restaurant_id: str) -> dict:
         "fssaiNumber": row["fssai_number"],
         "gstNumber": row["gst_number"],
         "commissionPct": float(row["commission_pct"]),
+        "commissionPlan": row["commission_plan"],
+        # Bank details the owner entered, in full: Foodos sends the money.
+        "payoutAccount": payout_accounts.admin_view(await payout_accounts.account_row(identifier)),
         "avgPrepMinutes": row["avg_prep_minutes"],
         "deliveryRadiusKm": float(row["delivery_radius_km"]) if row["delivery_radius_km"] is not None else None,
         "rating": float(row["rating"]),
@@ -268,6 +272,31 @@ async def get_restaurant(restaurant_id: str) -> dict:
     }
 
 
+def commission_for(plan: Optional[str], pct: Optional[float], current_pct: Optional[float]) -> tuple[str, float]:
+    """The plan and rate a restaurant ends up on.
+
+    standard and subscription charge the rate in the payment settings, so
+    any rate sent with them is ignored. A rate sent without a plan is a deal
+    agreed with this restaurant, so it becomes custom (older admin screens
+    sent only the rate). Custom without a rate keeps the current one.
+    """
+    if plan is None:
+        plan = "custom" if pct is not None else "standard"
+
+    plan_rate = payment_settings.plan_pct(plan)
+
+    if plan_rate is not None:
+        return plan, plan_rate
+
+    if pct is not None:
+        return plan, pct
+
+    if current_pct is not None:
+        return plan, current_pct
+
+    return plan, float(payment_settings.current()["commissionStandardPct"])
+
+
 async def create_restaurant(body: Any, actor_id: uuid.UUID, ip: Optional[str]) -> dict:
     owner_phone = normalize_phone(body.ownerPhone)
 
@@ -310,13 +339,15 @@ async def create_restaurant(body: Any, actor_id: uuid.UUID, ip: Optional[str]) -
             owner_id,
         )
 
+        plan, pct = commission_for(body.commissionPlan, body.commissionPct, None)
+
         restaurant_id = await connection.fetchval(
             """
             insert into restaurants
               (owner_id, name, description, cuisines, address_line, city, pincode, latitude, longitude,
                phone, is_veg, fssai_number, gst_number, commission_pct, avg_prep_minutes,
-               delivery_radius_km, status)
-            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'pending')
+               delivery_radius_km, status, commission_plan)
+            values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'pending', $17)
             returning id
             """,
             owner_id,
@@ -332,9 +363,10 @@ async def create_restaurant(body: Any, actor_id: uuid.UUID, ip: Optional[str]) -
             body.isVeg,
             body.fssaiNumber,
             body.gstNumber,
-            body.commissionPct,
+            pct,
             body.avgPrepMinutes,
             body.deliveryRadiusKm,
+            plan,
         )
 
         await audit.record(
@@ -356,7 +388,7 @@ async def update_restaurant(restaurant_id: str, body: Any, actor_id: uuid.UUID, 
     changes = body.model_dump(exclude_unset=True)
 
     # Name, address, city and cuisines cannot be emptied, only replaced.
-    for required in ("name", "addressLine", "city", "cuisines", "isVeg", "commissionPct", "avgPrepMinutes"):
+    for required in ("name", "addressLine", "city", "cuisines", "isVeg", "commissionPlan", "avgPrepMinutes"):
         if required in changes and changes[required] is None:
             raise bad_request("field_required", f"{required} cannot be empty")
 
@@ -366,13 +398,21 @@ async def update_restaurant(restaurant_id: str, body: Any, actor_id: uuid.UUID, 
 
     async with transaction() as connection:
         current = await connection.fetchrow(
-            "select id, owner_id from restaurants where id = $1 for update", identifier
+            "select id, owner_id, commission_plan, commission_pct from restaurants where id = $1 for update",
+            identifier,
         )
 
         if current is None:
             raise not_found("restaurant_not_found", "That restaurant could not be found")
 
         assignments, args = [], [identifier]
+
+        if "commissionPlan" in changes or "commissionPct" in changes:
+            plan, pct = commission_for(
+                changes.get("commissionPlan"), changes.get("commissionPct"), float(current["commission_pct"])
+            )
+            args += [plan, pct]
+            assignments += [f"commission_plan = ${len(args) - 1}", f"commission_pct = ${len(args)}"]
 
         for field, column in COLUMNS.items():
             if field in changes:
@@ -506,3 +546,13 @@ async def menu(restaurant_id: str) -> list[dict]:
         )
 
     return list(categories.values())
+
+
+async def verify_payout_account(
+    restaurant_id: str, approve: bool, reason: Optional[str], actor_id: uuid.UUID, ip: Optional[str]
+) -> dict:
+    """Foodos has checked the owner's bank details (or found them wrong)."""
+    identifier = as_uuid(restaurant_id)
+    await payout_accounts.verify(identifier, approve, reason, actor_id, ip)
+
+    return await get_restaurant(str(identifier))

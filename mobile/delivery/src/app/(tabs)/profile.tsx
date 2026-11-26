@@ -16,6 +16,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { DocumentsCard } from '@/components/DocumentsCard'
+import { SupportCard } from '@/components/SupportCard'
 import { useAuth } from '@/lib/AuthContext'
 import { API_BASE_URL } from '@/lib/apiClient'
 import { fetchPartner, updatePartner, type Partner, type VehicleType } from '@/lib/delivery'
@@ -208,6 +209,8 @@ export default function ProfileScreen() {
           </Pressable>
 
           <DocumentsCard />
+
+          <SupportCard />
 
           <View style={styles.card}>
             <Text style={styles.cardLabel}>Connected to</Text>

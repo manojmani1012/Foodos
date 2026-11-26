@@ -59,6 +59,9 @@ class RestaurantFields(BaseModel):
     fssaiNumber: Optional[str] = None
     gstNumber: Optional[str] = None
     commissionPct: Optional[float] = Field(default=None, ge=0, le=100)
+    # standard and subscription charge the rate in the payment settings;
+    # commissionPct is only used for custom.
+    commissionPlan: Optional[Literal["standard", "subscription", "custom"]] = None
     avgPrepMinutes: Optional[int] = Field(default=None, ge=5, le=120)
     # Blank means the platform default.
     deliveryRadiusKm: Optional[float] = Field(default=None, ge=1, le=30)
@@ -143,7 +146,7 @@ class CreateRestaurantBody(RestaurantFields):
     latitude: float
     longitude: float
     isVeg: bool = False
-    commissionPct: float = Field(default=20, ge=0, le=100)
+    commissionPct: Optional[float] = Field(default=None, ge=0, le=100)
     avgPrepMinutes: int = Field(default=30, ge=5, le=120)
 
 
@@ -285,21 +288,91 @@ class UpdateOfferBody(OfferFields):
     pass
 
 
-class RecordPayoutBody(BaseModel):
-    partyType: Literal["restaurant", "delivery_partner"]
-    partyId: str
-    periodStart: datetime.date
-    periodEnd: datetime.date
+class PayoutReasonBody(BaseModel):
+    reason: str = Field(min_length=3, max_length=300)
+
+    @field_validator("reason")
+    @classmethod
+    def _tidy(cls, value: str) -> str:
+        value = value.strip()
+
+        if len(value) < 3:
+            raise ValueError("Give a reason, so the team knows why later")
+
+        return value
+
+
+class PayoutPaidBody(BaseModel):
+    # The bank's reference for the transfer (UTR), so it can be traced.
     reference: str = Field(min_length=4, max_length=60)
 
-    @model_validator(mode="after")
-    def _valid_period(self) -> "RecordPayoutBody":
-        self.reference = self.reference.strip()
+    @field_validator("reference")
+    @classmethod
+    def _tidy(cls, value: str) -> str:
+        value = value.strip()
 
-        if self.periodEnd < self.periodStart:
-            raise ValueError("The period ends before it starts")
+        if len(value) < 4:
+            raise ValueError("Enter the bank reference (UTR)")
 
-        return self
+        return value
+
+
+class PayoutRescheduleBody(BaseModel):
+    date: datetime.date
+
+
+class HolidayBody(BaseModel):
+    day: datetime.date
+    name: str = Field(min_length=2, max_length=80)
+
+
+class AdjustmentBody(BaseModel):
+    partyType: Literal["restaurant", "delivery_partner"]
+    partyId: str = Field(min_length=1, max_length=64)
+    # Signed: more than zero adds to what the partner is owed, less takes off.
+    amountPaise: int = Field(ge=-1_000_000, le=1_000_000)
+    note: str = Field(min_length=5, max_length=300)
+
+    @field_validator("amountPaise")
+    @classmethod
+    def _not_zero(cls, value: int) -> int:
+        if value == 0:
+            raise ValueError("Enter an amount other than zero")
+
+        return value
+
+    @field_validator("note")
+    @classmethod
+    def _tidy(cls, value: str) -> str:
+        value = value.strip()
+
+        if len(value) < 5:
+            raise ValueError("Say what this adjustment is for")
+
+        return value
+
+
+class IncludeExcludedBody(BaseModel):
+    """Empty means every held-out row."""
+
+    partyType: Optional[Literal["restaurant", "delivery_partner"]] = None
+    partyId: Optional[str] = Field(default=None, max_length=64)
+
+
+class PartialRefundBody(BaseModel):
+    amountPaise: int = Field(gt=0, le=10_000_000)
+    reason: str = Field(min_length=5, max_length=200)
+    chargedTo: Literal["restaurant", "rider", "foodos"]
+
+    @field_validator("reason")
+    @classmethod
+    def _tidy(cls, value: str) -> str:
+        value = value.strip()
+
+        if len(value) < 5:
+            raise ValueError("Say why, in a few words")
+
+        return value
 
 
 class CashDepositBody(BaseModel):
@@ -325,3 +398,29 @@ class CreateTargetBody(BaseModel):
     @classmethod
     def _tidy(cls, value: Optional[str]) -> Optional[str]:
         return (value or "").strip() or None
+
+
+class SupportReplyBody(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+    # A note for the team only; the person who raised the ticket never sees it.
+    internal: bool = False
+
+    @field_validator("message")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        value = value.strip()
+
+        if not value:
+            raise ValueError("Write a reply")
+
+        return value
+
+
+class WalletAdjustBody(BaseModel):
+    type: Literal["credit", "debit"]
+    amountPaise: int = Field(gt=0, le=1_000_000)
+    reason: str = Field(min_length=5, max_length=200)
+
+
+class TicketStatusBody(BaseModel):
+    status: Literal["open", "resolved", "closed"]

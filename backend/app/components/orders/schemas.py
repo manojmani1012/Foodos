@@ -91,6 +91,11 @@ class ReviewOrderBody(BaseModel):
     comment: Optional[str] = Field(default=None, max_length=500)
 
 
+class TopUpBody(BaseModel):
+    # In paise. The limits come from settings, so the service checks them.
+    amountPaise: int = Field(gt=0, le=100_000_000)
+
+
 class ConfirmPaymentBody(BaseModel):
     """Exactly what Razorpay's checkout hands back."""
 

@@ -161,6 +161,37 @@ export async function apiBlob(path: string): Promise<Blob> {
   return response.blob()
 }
 
+// A report (a CSV, say) behind the admin's sign-in, saved to the computer.
+// A plain link would not carry the Authorization header, so it is fetched
+// here and handed to the browser through an object URL.
+export async function apiDownload(path: string, query: Query, filename: string): Promise<void> {
+  let response = await send(path, { query })
+
+  if (response.status === 401 && (await refreshSession())) {
+    response = await send(path, { query })
+  }
+
+  if (!response.ok) {
+    let message = `Could not download the report (${response.status})`
+    try {
+      const body = await response.json()
+      if (body?.message) message = body.message
+    } catch {
+      // Not JSON: keep the generic message.
+    }
+    throw new ApiError(response.status, 'request_failed', message)
+  }
+
+  const url = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
 export async function api<T = any>(path: string, options: Options = {}): Promise<T> {
   let response = await send(path, options)
 

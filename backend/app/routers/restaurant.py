@@ -10,6 +10,8 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile
 
 from ..components.auth.dependencies import CurrentUser, require_role
 from ..components.media.service import MAX_IMAGE_BYTES
+from ..components.payouts import accounts as payout_accounts
+from ..components.payouts import party as payouts
 from ..components.restaurants import menu as menu_service
 from ..components.restaurants import portal
 from ..components.restaurants.portal_schemas import (
@@ -223,3 +225,31 @@ async def replace_item_addons(
     item = await menu_service.replace_addons(restaurant["id"], item_id, body.addons)
 
     return {"ok": True, "item": item}
+
+
+# --- Getting paid ----------------------------------------------------------
+
+
+@router.get("/payout-account")
+async def get_payout_account(restaurant: Any = Depends(owned_restaurant)):
+    return {"ok": True, **await payout_accounts.get_for_owner(restaurant["id"])}
+
+
+@router.put("/payout-account")
+async def save_payout_account(body: payout_accounts.PayoutAccountBody, restaurant: Any = Depends(owned_restaurant)):
+    return {"ok": True, **await payout_accounts.save_for_owner(restaurant["id"], body)}
+
+
+@router.get("/payouts")
+async def list_payouts(restaurant: Any = Depends(owned_restaurant)):
+    return {"ok": True, **await payouts.overview("restaurant", restaurant["id"])}
+
+
+@router.get("/payouts/{payout_id}")
+async def get_payout(payout_id: str, restaurant: Any = Depends(owned_restaurant)):
+    return {"ok": True, "payout": await payouts.detail("restaurant", restaurant["id"], payout_id)}
+
+
+@router.post("/payouts/{payout_id}/statement")
+async def payout_statement(payout_id: str, restaurant: Any = Depends(owned_restaurant)):
+    return {"ok": True, "url": await payouts.statement_link("restaurant", restaurant["id"], payout_id)}

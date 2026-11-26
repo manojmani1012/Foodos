@@ -509,7 +509,10 @@ class TestPay:
 
         km = accepted["distanceKm"]
         assert 4 < km < 6, f"Anna Nagar to T Nagar is about 5 km straight-line, got {km}"
-        expected = settings.rider_base_pay_paise + round(km * settings.rider_pay_per_km_paise) + 3000
+        # The payment settings' defaults: Rs 20 for the first 3 km, Rs 8 a km
+        # after that in whole rupees, the Rs 10 per-order incentive, and the tip.
+        extra = max(0, km - 3)
+        expected = 2000 + round(extra * 8) * 100 + 1000 + 3000
         assert accepted["earningPaise"] == expected
         assert offer["earningPaise"] == expected, "the offer shows what the rider will actually earn"
         assert accepted["pickupKm"] == 0 and 4 < accepted["dropKm"] < 6, "both legs are shown"
@@ -524,7 +527,7 @@ class TestPay:
 
         assert body["totals"]["deliveries"] == 1
         assert body["totals"]["earningsPaise"] == result["delivery"]["earningPaise"]
-        assert body["totals"]["earningsPaise"] > get_settings().rider_base_pay_paise, "pinned trips pay per km"
+        assert body["totals"]["earningsPaise"] >= 2000 + 1000, "base pay and the per-order incentive"
         assert body["cashCollectedTodayPaise"] == order["totalPaise"]
         assert len(body["daily"]) == 7
 

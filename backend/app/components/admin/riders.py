@@ -20,6 +20,7 @@ from ..delivery import cash
 from ..delivery.documents import REQUIRED as REQUIRED_DOCUMENTS
 from ..delivery.documents import as_view as documents_view
 from ..delivery.documents import check_type
+from ..payouts import ledger
 from . import audit
 
 STATUSES = ("pending", "active", "suspended", "rejected")
@@ -449,16 +450,19 @@ async def record_cash_deposit(
                 f"{rider['full_name'] or 'This rider'} holds only {_rupees(held)} in cash",
             )
 
-        await connection.execute(
+        deposit_id = await connection.fetchval(
             """
             insert into rider_cash_deposits (partner_id, amount_paise, reference, recorded_by)
             values ($1, $2, $3, $4)
+            returning id
             """,
             identifier,
             amount_paise,
             reference,
             actor_id,
         )
+        # Added back to the rider's next payout, which took the cash off.
+        await ledger.record_deposit(connection, deposit_id)
 
         await audit.record(
             actor_id,

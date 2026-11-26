@@ -206,11 +206,7 @@ export default function OrderScreen() {
             ) : null}
             {order.refund ? (
               <Text style={styles.refundNote}>
-                {order.refund.status === 'processed'
-                  ? `₹${order.refund.amount} has been refunded to your original payment method.`
-                  : order.refund.status === 'pending'
-                    ? `Refund of ₹${order.refund.amount} started. It reaches your original payment method in 5-7 working days.`
-                    : `Your refund of ₹${order.refund.amount} is delayed. Please contact Foodos support.`}
+                {refundText(order.refund)}
               </Text>
             ) : null}
           </View>
@@ -377,6 +373,9 @@ export default function OrderScreen() {
             </Pressable>
           )}
           {invoiceError ? <Text style={styles.invoiceError}>{invoiceError}</Text> : null}
+          {order.status === 'delivered' && order.refund ? (
+            <Text style={styles.refundNote}>{refundText(order.refund)}</Text>
+          ) : null}
         </View>
 
         <View style={styles.card}>
@@ -475,6 +474,16 @@ export default function OrderScreen() {
           </Pressable>
         )}
 
+        <Pressable
+          style={styles.helpButton}
+          onPress={() =>
+            router.push({ pathname: '/help/new', params: { orderId: order.id, orderNumber: order.orderNumber } })
+          }
+        >
+          <Feather name="help-circle" size={17} color={colors.brand} />
+          <Text style={styles.helpText}>Get help with this order</Text>
+        </Pressable>
+
         {CANCELLABLE.has(order.status) && (
           <Pressable style={styles.cancelButton} onPress={cancel} disabled={cancelling}>
             {cancelling ? (
@@ -552,6 +561,15 @@ function BillRow({ label, value, tone }: { label: string; value: number; tone?: 
       </Text>
     </View>
   )
+}
+
+// Where the money went, for a cancelled order or a part refund on a delivered one.
+function refundText(refund: NonNullable<Order['refund']>): string {
+  if (refund.status === 'failed') return `Your refund of ₹${refund.amount} is delayed. Please contact Foodos support.`
+  if (refund.destination === 'wallet') return `₹${refund.amount} is back in your Foodos wallet.`
+  if (refund.status === 'processed') return `₹${refund.amount} has been refunded to your original payment method.`
+
+  return `Refund of ₹${refund.amount} started. It reaches your original payment method in 5-7 working days.`
 }
 
 const styles = StyleSheet.create({
@@ -788,6 +806,18 @@ const styles = StyleSheet.create({
   },
   reorderText: { ...type.bodyStrong, color: colors.brand },
   invoice: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.md, alignSelf: 'flex-start' },
+  helpButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: space.sm,
+    paddingVertical: space.md,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.line,
+    backgroundColor: colors.surface,
+  },
+  helpText: { ...type.bodyStrong, color: colors.brand },
   invoiceText: { ...type.smallStrong, color: colors.brand },
   invoiceError: { ...type.caption, color: colors.danger, marginTop: space.xs },
   ghost: {

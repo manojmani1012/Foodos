@@ -14,16 +14,20 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
+import { SupportCard } from '@/components/SupportCard'
 import { useAuth } from '@/lib/AuthContext'
 import { API_BASE_URL } from '@/lib/apiClient'
 import {
+  fetchPayoutAccount,
   fetchRestaurant,
+  payoutAccountStatusLabel,
   pickDishPhoto,
   removeCoverPhoto,
   resolveImageUrl,
   setAcceptingOrders,
   shortTime,
   uploadCoverPhoto,
+  type PayoutAccount,
   type PhotoSource,
   type Restaurant,
 } from '@/lib/restaurant'
@@ -34,6 +38,8 @@ export default function ProfileScreen() {
   const router = useRouter()
 
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null)
+  // undefined while unknown, null when no bank details have been added.
+  const [payoutAccount, setPayoutAccount] = useState<PayoutAccount | null | undefined>(undefined)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
@@ -44,6 +50,10 @@ export default function ProfileScreen() {
     try {
       setRestaurant(await fetchRestaurant())
       setError('')
+      // Not worth an error banner on its own: the row just shows no status.
+      fetchPayoutAccount()
+        .then(setPayoutAccount)
+        .catch(() => {})
     } catch (loadError: any) {
       setError(loadError.message || 'Could not load your details')
     } finally {
@@ -221,8 +231,20 @@ export default function ProfileScreen() {
           <NavRow
             icon="trending-up"
             label="Earnings"
-            hint="Takings, commission and what you keep"
+            hint="Takings, payouts and statements"
             onPress={() => router.push('/earnings' as Href)}
+          />
+          <NavRow
+            icon="credit-card"
+            label="Bank account for payouts"
+            hint={
+              payoutAccount === undefined
+                ? 'Where Foodos sends your money'
+                : payoutAccount?.accountNumberMasked
+                  ? `${payoutAccountStatusLabel(payoutAccount)} · ${payoutAccount.accountNumberMasked}`
+                  : payoutAccountStatusLabel(payoutAccount)
+            }
+            onPress={() => router.push('/bank')}
           />
           <NavRow
             icon="star"
@@ -259,6 +281,8 @@ export default function ProfileScreen() {
           Your name, address and cuisines decide what customers search for and where riders go, so
           Foodos support changes those for you.
         </Text>
+
+        <SupportCard />
 
         <Pressable style={styles.signOut} onPress={confirmSignOut}>
           <Feather name="log-out" size={16} color={colors.danger} />

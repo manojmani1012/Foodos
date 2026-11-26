@@ -19,8 +19,13 @@ if (Platform.OS !== 'web') {
   })
 }
 
-// New orders, cancellations and the rider arriving all open the order.
+// New orders, cancellations and the rider arriving all open the order;
+// payout news opens that payout.
 function routeFor(data: Record<string, unknown> | undefined): Href | null {
+  if (data?.type === 'payout' && typeof data.payoutId === 'string') {
+    return { pathname: '/payout/[id]', params: { id: data.payoutId } }
+  }
+
   const orderId = typeof data?.orderId === 'string' ? data.orderId : null
 
   return orderId ? `/order/${orderId}` : null

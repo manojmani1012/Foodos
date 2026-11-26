@@ -18,8 +18,10 @@ if (Platform.OS !== 'web') {
   })
 }
 
-// Every customer notification is about an order.
+// Customer notifications are about an order, or a reply from Foodos support.
 function routeFor(data: Record<string, unknown> | undefined): Href | null {
+  if (data?.type === 'support' && typeof data.ticketId === 'string') return `/help/${data.ticketId}` as Href
+
   const orderId = typeof data?.orderId === 'string' ? data.orderId : null
 
   return orderId ? `/order/${orderId}` : null

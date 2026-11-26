@@ -126,6 +126,43 @@ export const REFUND_STATUS: Record<string, { label: string; tone: Tone }> = {
   failed: { label: 'Refund failed', tone: 'danger' },
 }
 
+export const PAYOUT_STATUS: Record<string, { label: string; tone: Tone }> = {
+  pending: { label: 'Pending', tone: 'neutral' },
+  scheduled: { label: 'Scheduled', tone: 'info' },
+  on_hold: { label: 'On hold', tone: 'warning' },
+  processing: { label: 'Processing', tone: 'progress' },
+  paid: { label: 'Paid', tone: 'success' },
+  failed: { label: 'Failed', tone: 'danger' },
+  cancelled: { label: 'Cancelled', tone: 'neutral' },
+}
+
+export const BANK_STATUS: Record<string, { label: string; tone: Tone }> = {
+  pending: { label: 'Waiting for check', tone: 'warning' },
+  verified: { label: 'Verified', tone: 'success' },
+  rejected: { label: 'Rejected', tone: 'danger' },
+}
+
+export const PARTY_LABEL: Record<string, string> = { restaurant: 'Restaurant', delivery_partner: 'Rider' }
+
+export const CHARGED_TO: Record<string, string> = { restaurant: 'Restaurant', rider: 'Rider', foodos: 'Foodos' }
+
+// ISO weekdays: 1 = Monday ... 7 = Sunday.
+export const WEEKDAY_SHORT = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+export const WEEKDAY_LONG = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+// "2026-11-21" -> "Sat 21 Nov".
+export function formatPayDay(day: string | null | undefined) {
+  if (!day) return '—'
+  const [year, month, date] = day.split('-').map(Number)
+  const weekday = new Date(Date.UTC(year, month - 1, date, 6)).getUTCDay()
+  return `${WEEKDAY_SHORT[weekday === 0 ? 7 : weekday]} ${formatDay(day)}`
+}
+
+// "₹1,234.50" for positive, "−₹1,234.50" for negative.
+export function formatSigned(paise: number) {
+  return paise < 0 ? `−${formatMoney(-paise)}` : formatMoney(paise)
+}
+
 export const DELIVERY_STATUS: Record<string, string> = {
   searching: 'Finding a rider',
   accepted: 'Rider going to restaurant',

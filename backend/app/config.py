@@ -96,11 +96,9 @@ class Settings(BaseSettings):
     push_enabled: bool = True
     expo_access_token: str = ""
 
-    # Rider pay per delivery: a base amount plus a rate per km travelled
-    # (rider to restaurant, then restaurant to customer), and every rupee of
-    # the customer's tip. Placeholders until the client sets real numbers.
-    rider_base_pay_paise: int = Field(default=2500, ge=0)
-    rider_pay_per_km_paise: int = Field(default=600, ge=0)
+    # Rider pay, commission and the payout schedule are edited in the admin
+    # panel (Finance > Settings) and kept in the database: see
+    # components/payouts/settings.py.
 
     # Customers see, and can order from, restaurants within this distance of
     # their pin. A restaurant can have its own radius, set in the admin panel.
@@ -133,6 +131,12 @@ class Settings(BaseSettings):
     # prepaid orders until they hand it over to Foodos. 0 turns the limit off.
     rider_cash_limit_paise: int = Field(default=200000, ge=0)
 
+    # Foodos wallet. It only pays for orders on Foodos (a closed wallet), and
+    # the balance is capped so it stays a small prepaid balance.
+    wallet_max_balance_paise: int = Field(default=1000000, ge=0)
+    wallet_min_topup_paise: int = Field(default=10000, ge=100)
+    wallet_max_topup_paise: int = Field(default=500000, ge=100)
+
     # Which orders need the customer's 4-digit code before the rider can mark
     # them delivered.
     delivery_code_required: Literal["all", "prepaid", "off"] = "all"
@@ -141,6 +145,18 @@ class Settings(BaseSettings):
     # so Foodos issues the invoice for the restaurant, with its own legal name,
     # address and GSTIN. Placeholders until the client sends them; a blank
     # GSTIN is left off the invoice.
+    # Who runs Foodos, for the policy pages (/legal/...), the Contact page and
+    # the apps' Help screens. Left empty, the pages show a placeholder such as
+    # "[Company legal name]" until the client sends its registered details.
+    company_legal_name: str = ""
+    company_address: str = ""
+    company_jurisdiction: str = "Chennai, Tamil Nadu"
+    support_email: str = ""
+    support_phone: str = ""
+    support_hours: str = ""
+    grievance_officer_name: str = ""
+    grievance_officer_email: str = ""
+
     invoice_company_name: str = "Foodos"
     invoice_company_address: str = ""
     invoice_company_gstin: str = ""

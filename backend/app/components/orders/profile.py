@@ -88,6 +88,16 @@ async def delete_account(user_id: uuid.UUID) -> None:
         if exists is None:
             raise not_found("user_not_found", "That account no longer exists")
 
+        # Money in the wallet cannot simply vanish with the account.
+        balance = await connection.fetchval("select balance_paise from wallets where user_id = $1", user_id)
+
+        if balance:
+            raise conflict(
+                "wallet_not_empty",
+                f"Your Foodos wallet still has ₹{balance // 100}. Use it on an order, "
+                "or contact Foodos support, before deleting your account",
+            )
+
         # Anything that only serves the person goes.
         await connection.execute("delete from customer_addresses where user_id = $1", user_id)
         await connection.execute("delete from favourites where user_id = $1", user_id)

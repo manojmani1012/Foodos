@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from app import database  # noqa: E402
+from app.components.payouts import settings as payment_settings  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.main import app  # noqa: E402
 from db.migrate import migrate  # noqa: E402
@@ -55,11 +56,20 @@ TEST_DB_NAME = "foodos_test"
 # payment_webhook_events has no foreign key to any of these, so `cascade` never
 # reaches it and it has to be named explicitly, or one test's events are still
 # there for the next.
+# payout_batches, payout_holidays and platform_settings have no foreign key
+# to these either. The payment settings go back to their defaults, and
+# automatic payouts are taken to have started today, as on a fresh deploy.
 TRUNCATE_SQL = (
     "truncate refresh_tokens, user_roles, delivery_partners, otp_codes, "
     "restaurants, offers, orders, customer_addresses, payment_webhook_events, "
+    "payout_batches, payout_holidays, platform_settings, "
     "users cascade"
 )
+
+RESET_SETTINGS_SQL = """
+    insert into platform_settings (key, value)
+    values ('payouts_started_on', to_jsonb(((now() at time zone 'Asia/Kolkata')::date)::text))
+"""
 
 
 def _swap_database(url: str, name: str) -> str:
@@ -120,6 +130,8 @@ async def pool(migrated_database: str):
     database.set_pool(test_pool)
 
     await test_pool.execute(TRUNCATE_SQL)
+    await test_pool.execute(RESET_SETTINGS_SQL)
+    await payment_settings.load()
 
     yield test_pool
 

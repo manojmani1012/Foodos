@@ -11,6 +11,7 @@ from ..delivery import service as delivery
 from ..geo import distance_km, ride_minutes
 from ..notifications import events
 from ..payments import refunds
+from ..wallet import service as wallet_service
 from .delivery_code import code_required, new_code
 from ..test_accounts import is_test_account
 from .pricing import quote_cart, quote_serviceability
@@ -322,7 +323,7 @@ async def place_order(
 
     from ..payments import razorpay as razorpay_client
 
-    if payment_method != "cod" and not razorpay_client.is_configured():
+    if payment_method not in ("cod", "wallet") and not razorpay_client.is_configured():
         raise bad_request(
             "payment_method_unavailable",
             "Online payment is not available right now. Please choose cash on delivery",
@@ -353,7 +354,11 @@ async def place_order(
     total = quote.total_paise
 
     async with transaction() as connection:
+        # Cash and the wallet need nothing more from a gateway, so the order
+        # goes straight to the kitchen. The wallet is charged below.
         is_cash = payment_method == "cod"
+        is_wallet = payment_method == "wallet"
+        confirmed_now = is_cash or is_wallet
 
         order_id = await connection.fetchval(
             """
@@ -365,7 +370,7 @@ async def place_order(
                round_off_paise, delivery_code, is_test,
                cooking_instructions, no_cutlery, delivery_preferences)
             values ($1, $2, $3::jsonb, $16, $4, $5, $6, $7, $8, $9, $10, $11,
-                    $12, 'pending', $13, $14, $17, $15, $18, $19,
+                    $12, $23, $13, $14, $17, $15, $18, $19,
                     (select is_test from users where id = $1), $20, $21, $22::text[])
             returning id
             """,
@@ -384,14 +389,19 @@ async def place_order(
             special_instructions,
             datetime.now(timezone.utc) + timedelta(minutes=45),
             idempotency_key,
-            "confirmed" if is_cash else "pending",
-            datetime.now(timezone.utc) if is_cash else None,
+            "confirmed" if confirmed_now else "pending",
+            datetime.now(timezone.utc) if confirmed_now else None,
             quote.round_off_paise,
             new_code(),
             (cooking_instructions or "").strip() or None,
             no_cutlery,
             list(dict.fromkeys(delivery_preferences or [])),
+            "paid" if is_wallet else "pending",
         )
+
+        if is_wallet:
+            # Inside this transaction: if the balance is short, nothing is placed.
+            await wallet_service.pay_for_order(connection, user_id, order_id, total)
 
         for line in quote.lines:
             order_item_id = await connection.fetchval(
@@ -437,13 +447,13 @@ async def place_order(
             """,
             order_id,
             user_id,
-            "confirmed" if is_cash else "pending",
-            "Order placed" if is_cash else "Awaiting payment",
+            "confirmed" if confirmed_now else "pending",
+            "Order placed" if is_cash else "Paid from the Foodos wallet" if is_wallet else "Awaiting payment",
         )
 
     # A cash order goes straight to the restaurant; an online one waits until
     # it is paid (see payments).
-    if is_cash:
+    if confirmed_now:
         await events.new_order(order_id)
 
     return await _order_response(order_id)

@@ -189,7 +189,8 @@ class TestDailyTargets:
         assert first["targetsReached"] == []
         assert second["targetsReached"] == [{"name": two["name"], "bonusPaise": 5000}]
         assert [(t["tripsDone"], t["achieved"]) for t in progress] == [(2, True), (2, False)]
-        assert earnings["totals"]["incentivePaise"] == 5000
+        # The target bonus, plus the Rs 10 per-order incentive on each of the two trips.
+        assert earnings["totals"]["incentivePaise"] == 5000 + 2 * 1000
         assert await fetchval("select count(*) from incentive_awards") == 1
         assert [(t["targetTrips"], t["reachedToday"], t["paidTotalPaise"]) for t in listed] == [(2, 1, 5000), (3, 0, 0)]
 

@@ -25,6 +25,8 @@ export type Dashboard = {
   riders: { active: number; online: number; busy: number; pending: number }
   restaurants: { live: number; accepting: number; pending: number }
   customers: { total: number; newToday: number }
+  // Tickets nobody at Foodos has answered yet.
+  support?: { waiting: number }
   attention: { waitingForRestaurant: StuckOrder[]; waitingForRider: StuckOrder[]; failedRefunds: StuckOrder[] }
   daily: { date: string; orders: number; cancelled: number; deliveredPaise: number }[]
 }
@@ -64,6 +66,9 @@ export type Restaurant = {
   fssaiNumber: string | null
   gstNumber: string | null
   commissionPct: number
+  commissionPlan?: 'standard' | 'subscription' | 'custom'
+  // Where Foodos sends the owner's money; entered in the Restaurant app.
+  payoutAccount?: PayoutAccount | null
   avgPrepMinutes: number
   // Blank means the platform default (7 km).
   deliveryRadiusKm: number | null
@@ -264,6 +269,9 @@ export type Order = {
     requestedBy: string | null
     requestedAt: string
     processedAt: string | null
+    // Partial refunds by Foodos: who bears it, and where the money went.
+    chargedTo?: RefundChargedTo | null
+    destination?: 'original' | 'wallet' | null
   }[]
   actions: { canCancel: boolean; canRetryRefund: boolean; canAssignRider: boolean }
 }
@@ -319,6 +327,20 @@ export type Customer = {
   joinedAt: string
   lastSignedInAt: string | null
   otherRoles: string[]
+  // The Foodos wallet: what they hold, and the latest movements.
+  wallet: {
+    balancePaise: number
+    transactions: {
+      id: number
+      type: 'credit' | 'debit'
+      label: string
+      amountPaise: number
+      balanceAfterPaise: number
+      orderNumber: string | null
+      note: string | null
+      createdAt: string
+    }[]
+  }
   stats: { orders: number; delivered: number; cancelled: number; cancelledByCustomer: number; spentPaise: number }
   addresses: { label: string; address: string; isDefault: boolean }[]
   recentOrders: {
@@ -354,52 +376,117 @@ export type Offer = {
   createdAt: string
 }
 
-export type PayoutRecord = {
-  id: string
-  periodStart: string
-  periodEnd: string
-  netPaise: number
-  reference: string
-  paidAt: string | null
+export type PartyType = 'restaurant' | 'delivery_partner'
+
+export type PayoutStatus = 'pending' | 'scheduled' | 'on_hold' | 'processing' | 'paid' | 'failed' | 'cancelled'
+
+// Payment settings, edited under Settings. Money in paise, percentages as numbers.
+export type PaymentSettings = {
+  commissionStandardPct: number
+  commissionSubscriptionPct: number
+  gstOnCommissionPct: number
+  restaurantTdsPct: number
+  riderBasePaise: number
+  riderBaseKm: number
+  riderPerKmPaise: number
+  riderOrderIncentivePaise: number
+  riderDistanceBasis: 'trip' | 'drop'
+  // ISO weekdays, 1 = Monday ... 7 = Sunday.
+  payoutSchedule: { days: number[]; payWeekday: number }[]
+  cutoffTime: string
+  minPayoutPaise: number
+  refundChargedToDefault: RefundChargedTo
+  payoutTime?: string
 }
 
-export type StatementLine = {
-  partyId: string
-  name: string | null
-  contact: { name: string | null; phone: string; upi?: string | null }
-  count: number
-  breakdown: Record<string, number>
-  grossPaise: number
-  commissionPaise: number
-  adjustmentsPaise: number
-  netPaise: number
-  payout: PayoutRecord | null
-  overlaps: PayoutRecord[]
-}
+export type Holiday = { day: string; name: string }
 
-export type Statement = {
-  partyType: 'restaurant' | 'delivery_partner'
-  periodStart: string
-  periodEnd: string
-  canRecord: boolean
-  lines: StatementLine[]
-  totals: {
-    count: number
-    grossPaise: number
-    commissionPaise: number
-    adjustmentsPaise: number
-    netPaise: number
-    unpaidNetPaise: number
+export type RefundChargedTo = 'restaurant' | 'rider' | 'foodos'
+
+export type CountAndAmount = { count: number; netPaise: number }
+
+export type FinanceOverview = {
+  period: { from: string; to: string }
+  collections: { onlinePaise: number; walletPaise: number; cashPaise: number; totalPaise: number; refundsPaise: number }
+  commission: { commissionPaise: number; gstOnCommissionPaise: number; deliveryFeesPaise: number }
+  payable: { restaurantsPaise: number; ridersPaise: number; riderOwesPaise: number }
+  payouts: {
+    scheduled: CountAndAmount
+    onHold: CountAndAmount
+    failed: CountAndAmount
+    paid: CountAndAmount
+    dueToday: CountAndAmount
   }
+  nextPayDates: { date: string; count: number; netPaise: number }[]
 }
 
-export type PayoutHistoryRow = PayoutRecord & {
-  partyType: 'restaurant' | 'delivery_partner'
+export type PayoutRow = {
+  id: string
+  partyType: PartyType
   partyId: string
   partyName: string | null
+  contact: { name: string | null; phone: string | null }
+  status: PayoutStatus
+  scheduledFor: string | null
+  periodStart: string
+  periodEnd: string
   grossPaise: number
   commissionPaise: number
   adjustmentsPaise: number
+  netPaise: number
+  reference: string | null
+  paidAt: string | null
+  holdReason: string | null
+  failureReason: string | null
+  bank: { verified: boolean; summary: string | null }
+  entryCount: number
+}
+
+export type LedgerEntry = {
+  id: number | string
+  kind: 'order' | 'delivery' | 'cash_collected' | 'cash_deposit' | 'refund' | 'adjustment' | string
+  orderId: string | null
+  orderNumber: string | null
+  businessDate: string
+  amountPaise: number
+  breakdown: Record<string, number>
+  note: string | null
+  createdAt: string
+}
+
+export type Payout = PayoutRow & {
+  bankDetails: {
+    holder: string | null
+    accountNumber: string | null
+    ifsc: string | null
+    bankName: string | null
+    upiId: string | null
+  } | null
+  entries: LedgerEntry[]
+  history: { action: string; by: string | null; at: string; note: string | null }[]
+}
+
+export type UnpaidParty = {
+  partyType: PartyType
+  partyId: string
+  partyName: string | null
+  duePaise: number
+  entryCount: number
+  oldestDate: string | null
+  belowMinimum: boolean
+}
+
+export type Unpaid = { parties: UnpaidParty[]; excluded: { count: number; amountPaise: number } }
+
+export type PayoutAccount = {
+  holder: string | null
+  accountNumber: string | null
+  ifsc: string | null
+  bankName: string | null
+  upiId: string | null
+  status: 'pending' | 'verified' | 'rejected'
+  rejectReason: string | null
+  updatedAt: string | null
 }
 
 export type Activity = {
@@ -426,4 +513,25 @@ export type DailyTarget = {
   reachedToday: number
   reachedTotal: number
   paidTotalPaise: number
+}
+
+export type SupportTicketRow = {
+  id: string
+  ticketNumber: string
+  subject: string
+  status: 'open' | 'in_progress' | 'resolved' | 'closed'
+  priority: 'low' | 'medium' | 'high'
+  // Which app it came from.
+  role: 'customer' | 'restaurant_owner' | 'delivery_partner'
+  person: { id: string; name: string | null; phone: string }
+  order: { id: string; orderNumber: string; status?: string } | null
+  lastMessage: string | null
+  messageCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type SupportTicket = SupportTicketRow & {
+  resolvedAt: string | null
+  messages: { id: string; fromSupport: boolean; author: string | null; body: string; internal: boolean; createdAt: string }[]
 }

@@ -24,6 +24,10 @@ if (Platform.OS !== 'web') {
 function routeFor(data: Record<string, unknown> | undefined): Href | null {
   if (data?.type === 'delivery') return '/delivery'
   if (data?.type === 'offer') return '/'
+  // Payout scheduled, reminder, paid, failed or held.
+  if (data?.type === 'payout' && typeof data.payoutId === 'string') {
+    return { pathname: '/payout/[id]', params: { id: data.payoutId } }
+  }
 
   return null
 }

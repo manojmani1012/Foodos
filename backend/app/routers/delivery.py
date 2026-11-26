@@ -16,6 +16,7 @@ from ..components.delivery.schemas import (
     StepBody,
 )
 from ..components.media.service import MAX_IMAGE_BYTES
+from ..components.payouts import party as payouts
 
 router = APIRouter(prefix="/api/v1/delivery", tags=["delivery"])
 
@@ -130,3 +131,18 @@ async def earnings(days: int = Query(default=7, ge=1, le=90), user: CurrentUser 
 @router.get("/history")
 async def history(user: CurrentUser = Depends(rider_only)):
     return {"ok": True, "deliveries": await service.history(user.id)}
+
+
+@router.get("/payouts")
+async def list_payouts(user: CurrentUser = Depends(rider_only)):
+    return {"ok": True, **await payouts.overview("delivery_partner", user.id)}
+
+
+@router.get("/payouts/{payout_id}")
+async def get_payout(payout_id: str, user: CurrentUser = Depends(rider_only)):
+    return {"ok": True, "payout": await payouts.detail("delivery_partner", user.id, payout_id)}
+
+
+@router.post("/payouts/{payout_id}/statement")
+async def payout_statement(payout_id: str, user: CurrentUser = Depends(rider_only)):
+    return {"ok": True, "url": await payouts.statement_link("delivery_partner", user.id, payout_id)}
