@@ -14,14 +14,17 @@ PAYOUT_SELECT = """
            coalesce(ou.full_name, pu.full_name) as contact_name,
            coalesce(ou.phone, pu.phone) as contact_phone,
            a.status as account_status, a.bank_name, a.account_number, a.account_holder_name, a.ifsc,
-           a.upi_id, dp.payout_upi_id, dp.payout_account_masked,
+           a.upi_id,
+           ra.status as rider_account_status, ra.bank_name as rider_bank_name,
+           ra.account_number as rider_account_number, ra.account_holder_name as rider_holder,
+           ra.ifsc as rider_ifsc, ra.upi_id as rider_upi_id,
            (select count(*) from earnings_entries e where e.payout_id = p.id)::int as entry_count
     from payouts p
     left join restaurants r on r.id = p.restaurant_id
     left join users ou on ou.id = r.owner_id
     left join restaurant_payout_accounts a on a.restaurant_id = p.restaurant_id
     left join users pu on pu.id = p.partner_id
-    left join delivery_partners dp on dp.user_id = p.partner_id
+    left join rider_payout_accounts ra on ra.partner_id = p.partner_id
 """
 
 
@@ -29,23 +32,37 @@ def _iso(value: Any) -> Optional[str]:
     return value.isoformat() if value is not None else None
 
 
+def _account_status(row: Any) -> Optional[str]:
+    return row["account_status"] if row["party_type"] == "restaurant" else row["rider_account_status"]
+
+
 def bank_summary(row: Any) -> dict:
-    """Where the money goes, in a few words. Restaurants: their verified bank
-    details. Riders have no verification step yet, so any saved UPI id or
-    account counts."""
+    """Where the money goes, in a few words. Only a verified account can be
+    paid; riders may have a bank account or just a UPI id."""
     if row["party_type"] == "restaurant":
-        summary = None
+        number, bank_name, upi = row["account_number"], row["bank_name"], None
+    else:
+        number, bank_name, upi = row["rider_account_number"], row["rider_bank_name"], row["rider_upi_id"]
 
-        if row["account_number"]:
-            summary = f"{row['bank_name'] or 'Bank'} ...{row['account_number'][-4:]}"
-        elif row["upi_id"]:
-            summary = row["upi_id"]
+    summary = f"{bank_name or 'Bank'} ...{number[-4:]}" if number else upi
 
-        return {"verified": row["account_status"] == "verified", "summary": summary}
+    return {"verified": _account_status(row) == "verified", "summary": summary}
 
-    summary = row["payout_upi_id"] or row["payout_account_masked"]
 
-    return {"verified": summary is not None, "summary": summary}
+# For queries over `(PAYOUT_SELECT) p`: the party's account is missing or not
+# verified, so the payout cannot be paid.
+BLOCKED_SQL = "(case when p.party_type = 'restaurant' then p.account_status else p.rider_account_status end) is distinct from 'verified'"
+
+
+def blocker(row: Any) -> Optional[str]:
+    """Why this payout cannot be paid yet: no bank details, or they are not
+    verified. None when the account is verified."""
+    status = _account_status(row)
+
+    if status == "verified":
+        return None
+
+    return {None: "bank_missing", "pending": "bank_pending", "rejected": "bank_rejected"}[status]
 
 
 def payout_row(row: Any) -> dict:
@@ -69,6 +86,7 @@ def payout_row(row: Any) -> dict:
         "holdReason": row["hold_reason"],
         "failureReason": row["failure_reason"],
         "bank": bank_summary(row),
+        "blocker": blocker(row),
         "entryCount": row["entry_count"],
     }
 
@@ -100,6 +118,9 @@ RESTAURANT_BREAKDOWN = """
     select coalesce(sum((e.breakdown->>'foodPaise')::bigint) filter (where e.kind = 'order'), 0)::bigint as food,
            coalesce(sum((e.breakdown->>'packagingPaise')::bigint) filter (where e.kind = 'order'), 0)::bigint as packaging,
            coalesce(sum((e.breakdown->>'commissionPaise')::bigint) filter (where e.kind = 'order'), 0)::bigint as commission,
+           coalesce(sum((e.breakdown->>'gatewayFeePaise')::bigint) filter (where e.kind = 'order'), 0)::bigint as gateway,
+           coalesce(sum((e.breakdown->>'discountPaise')::bigint) filter (where e.kind = 'order'), 0)::bigint as discount,
+           coalesce(sum((e.breakdown->>'bankOfferPaise')::bigint) filter (where e.kind = 'order'), 0)::bigint as bank_offer,
            coalesce(sum((e.breakdown->>'gstOnCommissionPaise')::bigint) filter (where e.kind = 'order'), 0)::bigint as gst,
            coalesce(sum((e.breakdown->>'tdsPaise')::bigint) filter (where e.kind = 'order'), 0)::bigint as tds,
            coalesce(-sum(e.amount_paise) filter (where e.kind = 'refund'), 0)::bigint as refunds,
@@ -114,6 +135,7 @@ RIDER_BREAKDOWN = """
            coalesce(sum((e.breakdown->>'distancePaise')::bigint) filter (where e.kind = 'delivery'), 0)::bigint as distance,
            coalesce(sum((e.breakdown->>'incentivePaise')::bigint) filter (where e.kind = 'delivery'), 0)::bigint as incentive,
            coalesce(sum((e.breakdown->>'tipPaise')::bigint) filter (where e.kind = 'delivery'), 0)::bigint as tips,
+           coalesce(sum((e.breakdown->>'tdsPaise')::bigint) filter (where e.kind = 'delivery'), 0)::bigint as tds,
            coalesce(-sum(e.amount_paise) filter (where e.kind = 'cash_collected'), 0)::bigint as cash_collected,
            coalesce(sum(e.amount_paise) filter (where e.kind = 'cash_deposit'), 0)::bigint as cash_deposited,
            coalesce(-sum(e.amount_paise) filter (where e.kind = 'refund'), 0)::bigint as refunds,
@@ -130,6 +152,9 @@ def breakdown_to_dict(party_type: str, row: Any) -> dict:
             "foodPaise": int(row["food"]),
             "packagingPaise": int(row["packaging"]),
             "commissionPaise": int(row["commission"]),
+            "gatewayFeePaise": int(row["gateway"]),
+            "discountPaise": int(row["discount"]),
+            "bankOfferPaise": int(row["bank_offer"]),
             "gstOnCommissionPaise": int(row["gst"]),
             "tdsPaise": int(row["tds"]),
             "refundsPaise": int(row["refunds"]),
@@ -141,6 +166,7 @@ def breakdown_to_dict(party_type: str, row: Any) -> dict:
         "distancePaise": int(row["distance"]),
         "incentivePaise": int(row["incentive"]),
         "tipsPaise": int(row["tips"]),
+        "tdsPaise": int(row["tds"]),
         "cashCollectedPaise": int(row["cash_collected"]),
         "cashDepositedPaise": int(row["cash_deposited"]),
         "adjustmentsPaise": int(row["adjustments"]),

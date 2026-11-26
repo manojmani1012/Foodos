@@ -332,11 +332,17 @@ export type EarningsShare = {
   packagingPaise: number
   commissionPaise: number
   earningsPaise: number
+  // Newer servers only: the payment gateway fee, coupons you funded, and any tax.
+  gatewayFeePaise?: number
+  discountPaise?: number
+  gstOnCommissionPaise?: number
+  tdsPaise?: number
 }
 
 export type Earnings = {
   days: number
   commissionPct: number
+  gatewayFeePct?: number
   totals: EarningsShare & { orders: number }
   daily: (EarningsShare & { date: string; orders: number })[]
   inProgress: { orders: number; foodPaise: number }
@@ -367,6 +373,9 @@ export type PayoutBreakdown = Partial<{
   foodPaise: number
   packagingPaise: number
   commissionPaise: number
+  gatewayFeePaise: number
+  discountPaise: number
+  bankOfferPaise: number
   gstOnCommissionPaise: number
   tdsPaise: number
   refundsPaise: number
@@ -405,7 +414,7 @@ export type PayoutEntry = {
 export type CommissionPlan = 'standard' | 'subscription' | 'custom'
 
 export type PayoutsOverview = {
-  plan: { commissionPlan: CommissionPlan; commissionPct: number }
+  plan: { commissionPlan: CommissionPlan; commissionPct: number; gatewayFeePct?: number }
   unpaid: {
     duePaise: number
     entryCount: number
@@ -452,13 +461,13 @@ export type PayoutAccount = {
   updatedAt: string | null
 }
 
-export type PayoutAccountChanges = Partial<{
-  holder: string | null
-  accountNumber: string | null
-  ifsc: string | null
-  bankName: string | null
-  upiId: string | null
-}>
+// Restaurants are paid by bank transfer only: no UPI.
+export type PayoutAccountChanges = {
+  holder: string
+  accountNumber?: string
+  ifsc: string
+  bankName?: string | null
+}
 
 export async function fetchPayoutAccount(): Promise<PayoutAccount | null> {
   const { account } = await request(`${BASE}/payout-account`)
@@ -474,7 +483,6 @@ export async function savePayoutAccount(changes: PayoutAccountChanges): Promise<
 
 export const IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/
 export const ACCOUNT_NUMBER_PATTERN = /^\d{9,18}$/
-export const UPI_PATTERN = /^[\w.\-]{2,}@[a-zA-Z]{2,}$/
 
 export function payoutAccountStatusLabel(account: PayoutAccount | null): string {
   if (!account) return 'Not added yet'

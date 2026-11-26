@@ -15,10 +15,10 @@ from typing import Any, Optional
 
 from ...database import fetch, fetchrow, fetchval
 from ...errors import bad_request, not_found
-from . import ledger, schedule
+from . import ledger, schedule, tds
 from . import settings as payment_settings
 from .party import entries_of
-from .views import PAYOUT_SELECT, payout_row
+from .views import BLOCKED_SQL, PAYOUT_SELECT, payout_row
 
 DEFAULT_DAYS = 30
 MAX_REPORT_DAYS = 366
@@ -75,6 +75,7 @@ async def overview(date_from: Optional[datetime.date], date_to: Optional[datetim
     commission = await fetchrow(
         """
         select coalesce(sum((breakdown->>'commissionPaise')::bigint), 0)::bigint as commission,
+               coalesce(sum((breakdown->>'gatewayFeePaise')::bigint), 0)::bigint as gateway,
                coalesce(sum((breakdown->>'gstOnCommissionPaise')::bigint), 0)::bigint as gst
         from earnings_entries
         where kind = 'order' and business_date between $1 and $2
@@ -125,6 +126,7 @@ async def overview(date_from: Optional[datetime.date], date_to: Optional[datetim
         },
         "commission": {
             "commissionPaise": int(commission["commission"]),
+            "gatewayFeePaise": int(commission["gateway"]),
             "gstOnCommissionPaise": int(commission["gst"]),
             "deliveryFeesPaise": int(collections["delivery_fees"]),
         },
@@ -139,6 +141,16 @@ async def overview(date_from: Optional[datetime.date], date_to: Optional[datetim
                 )
             ),
             "dueToday": _count(await group("status = 'scheduled' and scheduled_for <= $1", today)),
+            # Waiting on bank details that are missing or not verified yet.
+            "blocked": _count(
+                await fetchrow(
+                    f"""
+                    select count(*)::int as n, coalesce(sum(p.net_paise), 0)::bigint as net
+                    from ({PAYOUT_SELECT}) p
+                    where p.status in ('scheduled', 'on_hold') and {BLOCKED_SQL}
+                    """
+                )
+            ),
         },
         "nextPayDates": [
             {"date": row["scheduled_for"].isoformat(), "count": row["n"], "netPaise": int(row["net"])}
@@ -223,21 +235,21 @@ async def payout_detail(payout_id: str) -> dict:
 
     bank_details = None
 
-    if row["party_type"] == "restaurant" and (row["account_number"] or row["upi_id"]):
+    if row["party_type"] == "restaurant" and row["account_number"]:
         bank_details = {
             "holder": row["account_holder_name"],
             "accountNumber": row["account_number"],
             "ifsc": row["ifsc"],
             "bankName": row["bank_name"],
-            "upiId": row["upi_id"],
+            "upiId": None,
         }
-    elif row["party_type"] == "delivery_partner" and (row["payout_upi_id"] or row["payout_account_masked"]):
+    elif row["party_type"] == "delivery_partner" and (row["rider_account_number"] or row["rider_upi_id"]):
         bank_details = {
-            "holder": row["party_name"],
-            "accountNumber": row["payout_account_masked"],
-            "ifsc": None,
-            "bankName": None,
-            "upiId": row["payout_upi_id"],
+            "holder": row["rider_holder"] or row["party_name"],
+            "accountNumber": row["rider_account_number"],
+            "ifsc": row["rider_ifsc"],
+            "bankName": row["rider_bank_name"],
+            "upiId": row["rider_upi_id"],
         }
 
     logs = await fetch(
@@ -425,7 +437,8 @@ async def report(kind: str, date_from: Optional[datetime.date], date_to: Optiona
             )
     elif kind == "commission":
         writer.writerow(
-            ["Restaurant", "Plan", "Orders", "Food", "Packaging", "Commission", "GST on commission", "TDS",
+            ["Restaurant", "Plan", "Orders", "Food", "Packaging", "Commission", "Gateway fee",
+             "GST on commission and gateway fee", "TDS", "Coupons paid by restaurant", "Bank offers (not charged)",
              "Restaurant share"]
         )
         rows = await fetch(
@@ -434,8 +447,11 @@ async def report(kind: str, date_from: Optional[datetime.date], date_to: Optiona
                    sum((e.breakdown->>'foodPaise')::bigint) as food,
                    sum((e.breakdown->>'packagingPaise')::bigint) as packaging,
                    sum((e.breakdown->>'commissionPaise')::bigint) as commission,
+                   sum(coalesce((e.breakdown->>'gatewayFeePaise')::bigint, 0)) as gateway,
                    sum((e.breakdown->>'gstOnCommissionPaise')::bigint) as gst,
                    sum((e.breakdown->>'tdsPaise')::bigint) as tds,
+                   sum(coalesce((e.breakdown->>'discountPaise')::bigint, 0)) as discount,
+                   sum(coalesce((e.breakdown->>'bankOfferPaise')::bigint, 0)) as bank_offer,
                    sum(e.amount_paise) as share
             from earnings_entries e join restaurants r on r.id = e.restaurant_id
             where e.kind = 'order' and e.business_date between $1 and $2
@@ -449,7 +465,15 @@ async def report(kind: str, date_from: Optional[datetime.date], date_to: Optiona
         for row in rows:
             writer.writerow(
                 [row["name"], row["commission_plan"], row["orders"]]
-                + [_rupees(row[k]) for k in ("food", "packaging", "commission", "gst", "tds", "share")]
+                + [_rupees(row[k]) for k in ("food", "packaging", "commission", "gateway", "gst", "tds", "discount",
+                                              "bank_offer", "share")]
+            )
+    elif kind == "tds":
+        writer.writerow(["Rider", "Phone", "Deliveries", "Earnings (excluding tips)", "TDS deducted"])
+
+        for row in await tds.report_rows(start, end):
+            writer.writerow(
+                [row["full_name"], row["phone"] or "", row["deliveries"], _rupees(row["earnings"]), _rupees(row["tds"])]
             )
     else:
         raise not_found("report_not_found", "There is no such report")

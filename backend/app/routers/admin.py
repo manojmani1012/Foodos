@@ -56,7 +56,7 @@ from ..components.admin.schemas import (
 )
 from ..components.auth.dependencies import CurrentUser, require_role
 from ..components.delivery import documents as rider_documents
-from ..components.payouts.accounts import VerifyAccountBody
+from ..components.payouts.accounts import PayoutAccountBody, VerifyAccountBody
 from ..components.orders import invoice
 from ..errors import not_found
 
@@ -136,6 +136,13 @@ async def verify_payout_account(restaurant_id: str, body: VerifyAccountBody, act
     return {"ok": True, "restaurant": restaurant}
 
 
+@router.put("/restaurants/{restaurant_id}/payout-account")
+async def save_restaurant_payout_account(
+    restaurant_id: str, body: PayoutAccountBody, actor: Actor = Depends(acting_admin)
+):
+    return {"ok": True, "restaurant": await restaurants.save_payout_account(restaurant_id, body, actor.id, actor.ip)}
+
+
 @router.get("/restaurants/{restaurant_id}/menu")
 async def restaurant_menu(restaurant_id: str, user: CurrentUser = Depends(admin_only)):
     return {"ok": True, "categories": await restaurants.menu(restaurant_id)}
@@ -171,6 +178,18 @@ async def update_rider(rider_id: str, body: UpdateRiderBody, actor: Actor = Depe
 @router.post("/riders/{rider_id}/status")
 async def set_rider_status(rider_id: str, body: RiderStatusBody, actor: Actor = Depends(acting_admin)):
     return {"ok": True, "rider": await riders.set_status(rider_id, body.status, body.reason, actor.id, actor.ip)}
+
+
+@router.put("/riders/{rider_id}/payout-account")
+async def save_rider_payout_account(rider_id: str, body: PayoutAccountBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "rider": await riders.save_payout_account(rider_id, body, actor.id, actor.ip)}
+
+
+@router.post("/riders/{rider_id}/payout-account/verify")
+async def verify_rider_payout_account(rider_id: str, body: VerifyAccountBody, actor: Actor = Depends(acting_admin)):
+    rider = await riders.verify_payout_account(rider_id, body.approve, body.reason, actor.id, actor.ip)
+
+    return {"ok": True, "rider": rider}
 
 
 @router.get("/riders/{rider_id}/documents/{doc_type}/file")
@@ -458,6 +477,28 @@ async def cancel_payout(payout_id: str, body: PayoutReasonBody, actor: Actor = D
     return {"ok": True, "payout": await schedule.act(payout_id, "cancel", actor.id, actor.ip, reason=body.reason)}
 
 
+@router.get("/finance/batches")
+async def finance_batches(
+    status: Literal["open", "all"] = "open", user: CurrentUser = Depends(admin_only)
+):
+    return {"ok": True, **await schedule.list_batches(status)}
+
+
+@router.post("/finance/batches/{batch_id}/hold")
+async def hold_batch(batch_id: str, body: PayoutReasonBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, **await schedule.act_on_batch(batch_id, "hold", actor.id, actor.ip, reason=body.reason)}
+
+
+@router.post("/finance/batches/{batch_id}/release")
+async def release_batch(batch_id: str, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, **await schedule.act_on_batch(batch_id, "release", actor.id, actor.ip)}
+
+
+@router.post("/finance/batches/{batch_id}/reschedule")
+async def reschedule_batch(batch_id: str, body: PayoutRescheduleBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, **await schedule.act_on_batch(batch_id, "reschedule", actor.id, actor.ip, date=body.date)}
+
+
 @router.post("/finance/run")
 async def run_payouts(actor: Actor = Depends(acting_admin)):
     """The sweeper and the scheduler, now, instead of waiting for the loop."""
@@ -488,7 +529,7 @@ async def include_excluded(body: Optional[IncludeExcludedBody] = None, actor: Ac
 
 @router.get("/finance/reports/{kind}.csv")
 async def finance_report(
-    kind: Literal["collections", "payouts", "ledger", "commission"],
+    kind: Literal["collections", "payouts", "ledger", "commission", "tds"],
     dateFrom: Optional[datetime.date] = None,
     dateTo: Optional[datetime.date] = None,
     user: CurrentUser = Depends(admin_only),

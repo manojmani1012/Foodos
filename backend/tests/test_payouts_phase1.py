@@ -77,6 +77,25 @@ async def delivered_cash_order(client):
     return order, owner, customer, arjun, restaurant_id
 
 
+async def verify_bank(party_type: str, party_id) -> None:
+    """A verified bank account, so a payout can be marked paid."""
+    if party_type == "restaurant":
+        await execute(
+            """insert into restaurant_payout_accounts
+               (restaurant_id, account_holder_name, account_number, ifsc, bank_name, status)
+               values ($1::uuid, 'Test Holder', '123456781234', 'HDFC0001234', 'HDFC', 'verified')
+               on conflict (restaurant_id) do update set status = 'verified'""",
+            str(party_id),
+        )
+    else:
+        await execute(
+            """insert into rider_payout_accounts (partner_id, upi_id, status)
+               values ($1::uuid, 'rider@okaxis', 'verified')
+               on conflict (partner_id) do update set status = 'verified'""",
+            str(party_id),
+        )
+
+
 async def one_payout(client, amount=50000):
     """A restaurant payout of `amount`, scheduled for Thursday day(3)."""
     owner, restaurant_id = await owner_with_restaurant(client)
@@ -94,7 +113,7 @@ class TestSettings:
     async def test_the_defaults_are_what_the_client_asked_for(self, client, admin):
         body = (await client.get("/api/v1/admin/finance/settings", headers=admin)).json()
 
-        assert body["settings"]["commissionStandardPct"] == 22
+        assert body["settings"]["commissionStandardPct"] == 20
         assert body["settings"]["commissionSubscriptionPct"] == 10
         assert body["settings"]["riderBasePaise"] == 2000
         assert body["settings"]["minPayoutPaise"] == 10000
@@ -175,7 +194,7 @@ class TestPlans:
             await client.patch(url, json={"commissionPlan": "standard", "commissionPct": 30}, headers=admin)
         ).json()
         assert standard["restaurant"]["commissionPlan"] == "standard"
-        assert standard["restaurant"]["commissionPct"] == 22
+        assert standard["restaurant"]["commissionPct"] == 20
 
     async def test_a_new_restaurant_can_start_on_a_plan(self, client, admin):
         from test_admin import NEW_RESTAURANT
@@ -195,10 +214,11 @@ class TestPlans:
         )
         food, packaging = order["subtotalPaise"], order["packagingFeePaise"]
 
-        assert share == food + packaging - round(food * 0.22)
+        # A cash order: commission on food + packaging, no gateway fee.
+        assert share == food + packaging - round((food + packaging) * 0.20)
 
         payouts = (await client.get("/api/v1/restaurant/payouts", headers=owner["headers"])).json()
-        assert payouts["plan"] == {"commissionPlan": "standard", "commissionPct": 22}
+        assert payouts["plan"] == {"commissionPlan": "standard", "commissionPct": 20, "gatewayFeePct": 2}
 
 
 # --- Rider pay ----------------------------------------------------------------------
@@ -211,11 +231,11 @@ class TestRiderPay:
         assert sum(payment_settings.rider_pay_parts(None, None)) == 2000
 
     async def test_the_drop_basis_counts_only_the_drop(self, client, admin):
+        assert sum(payment_settings.rider_pay_parts(8, 5)) == 3600, "'drop' is the default"
+
+        await client.put("/api/v1/admin/finance/settings", json=settings_body(riderDistanceBasis="trip"), headers=admin)
+
         assert sum(payment_settings.rider_pay_parts(8, 5)) == 2000 + 4000
-
-        await client.put("/api/v1/admin/finance/settings", json=settings_body(riderDistanceBasis="drop"), headers=admin)
-
-        assert sum(payment_settings.rider_pay_parts(8, 5)) == 3600
 
     async def test_a_delivered_trip_earns_the_per_order_incentive(self, client):
         order, _, _, arjun, _ = await delivered_cash_order(client)
@@ -238,7 +258,7 @@ class TestRiderPay:
             totals["basePaise"] + totals["distancePaise"] + totals["incentivePaise"] + totals["tipsPaise"]
         )
         assert earnings["payRule"]["orderIncentivePaise"] == 1000
-        assert earnings["payRule"]["distanceBasis"] == "trip"
+        assert earnings["payRule"]["distanceBasis"] == "drop"
 
 
 # --- The ledger --------------------------------------------------------------------
@@ -409,7 +429,7 @@ class TestBatches:
 
 class TestActions:
     async def test_the_life_of_a_payout(self, client, admin):
-        _, _, payout_id = await one_payout(client)
+        _, restaurant_id, payout_id = await one_payout(client)
         base = f"/api/v1/admin/finance/payouts/{payout_id}"
 
         held = await client.post(f"{base}/hold", json={"reason": "Bank details unclear"}, headers=admin)
@@ -441,6 +461,9 @@ class TestActions:
         short = await client.post(f"{base}/paid", json={"reference": "UT"}, headers=admin)
         assert short.status_code == 400
 
+        assert (await client.post(f"{base}/paid", json={"reference": "UTR998877"}, headers=admin)).status_code == 409
+
+        await verify_bank("restaurant", restaurant_id)
         paid = await client.post(f"{base}/paid", json={"reference": "UTR998877"}, headers=admin)
         body = paid.json()["payout"]
         assert body["status"] == "paid"
@@ -455,8 +478,8 @@ class TestActions:
         assert set(history[-1]) == {"action", "by", "at", "note"}
         assert history[-1] == {**history[-1], "action": "Marked payout paid", "by": "Priya Sharma", "note": "UTR998877"}
         assert detail["entries"][0]["amountPaise"] == 50000
-        assert detail["bank"]["verified"] is False
-        assert detail["bankDetails"] is None
+        assert detail["bank"]["verified"] is True
+        assert detail["bankDetails"] is not None
 
     async def test_cancelling_returns_the_rows_to_the_next_batch(self, client, admin):
         _, _, payout_id = await one_payout(client)
@@ -638,32 +661,34 @@ class TestBankDetails:
         verified = await client.post(verify, json={"approve": True}, headers=admin)
         assert verified.json()["restaurant"]["payoutAccount"]["status"] == "verified"
 
-        # Adding a UPI id keeps the number but needs checking again.
-        changed = (await client.put(url, json={"upiId": "ravi@okhdfcbank"}, headers=owner["headers"])).json()["account"]
+        # Naming the bank keeps the number but needs checking again.
+        changed = (await client.put(url, json={"bankName": "HDFC Bank"}, headers=owner["headers"])).json()["account"]
         assert changed["status"] == "pending"
         assert changed["accountNumberMasked"] == "XXXXXX1234"
 
-        # Removing the bank account leaves UPI only.
-        upi_only = (
-            await client.put(url, json={"holder": None, "accountNumber": None, "ifsc": None}, headers=owner["headers"])
-        ).json()["account"]
-        assert upi_only["accountNumberMasked"] is None
-        assert upi_only["upiId"] == "ravi@okhdfcbank"
+        # Restaurants are paid to a bank account only: UPI, or removing the bank, is refused.
+        assert (await client.put(url, json={"upiId": "ravi@okhdfcbank"}, headers=owner["headers"])).status_code == 400
+        removed = await client.put(url, json={"holder": None, "accountNumber": None, "ifsc": None}, headers=owner["headers"])
+        assert removed.status_code == 400
 
-        rejected = await client.post(verify, json={"approve": False, "reason": "UPI id not found"}, headers=admin)
-        assert rejected.json()["restaurant"]["payoutAccount"]["rejectReason"] == "UPI id not found"
+        rejected = await client.post(verify, json={"approve": False, "reason": "Account not found"}, headers=admin)
+        assert rejected.json()["restaurant"]["payoutAccount"]["rejectReason"] == "Account not found"
 
     async def test_payout_rows_carry_the_bank_flag(self, client, admin):
         owner, restaurant_id, payout_id = await one_payout(client)
-        await client.put("/api/v1/restaurant/payout-account", json={"upiId": "biryani@okaxis"}, headers=owner["headers"])
+        await client.put(
+            "/api/v1/restaurant/payout-account",
+            json={"holder": "Ravi Kumar", "accountNumber": "123456781234", "ifsc": "HDFC0001234", "bankName": "HDFC"},
+            headers=owner["headers"],
+        )
         await client.post(
             f"/api/v1/admin/restaurants/{restaurant_id}/payout-account/verify", json={"approve": True}, headers=admin
         )
 
         row = (await client.get(f"/api/v1/admin/finance/payouts/{payout_id}", headers=admin)).json()["payout"]
 
-        assert row["bank"] == {"verified": True, "summary": "biryani@okaxis"}
-        assert row["bankDetails"]["upiId"] == "biryani@okaxis"
+        assert row["bank"] == {"verified": True, "summary": "HDFC ...1234"}
+        assert row["bankDetails"]["accountNumber"] == "123456781234"
 
 
 # --- The apps and statements ------------------------------------------------------------
@@ -682,13 +707,14 @@ class TestPartyViews:
         assert body["unpaid"]["nextPayDate"]
         assert body["unpaid"]["breakdown"]["adjustmentsPaise"] == 7000
         assert set(body["unpaid"]["breakdown"]) == {
-            "foodPaise", "packagingPaise", "commissionPaise", "gstOnCommissionPaise", "tdsPaise",
-            "refundsPaise", "adjustmentsPaise",
+            "foodPaise", "packagingPaise", "commissionPaise", "gatewayFeePaise", "discountPaise", "bankOfferPaise",
+            "gstOnCommissionPaise", "tdsPaise", "refundsPaise", "adjustmentsPaise",
         }
         assert [p["id"] for p in body["upcoming"]] == [payout_id]
         assert body["upcoming"][0]["breakdown"]["adjustmentsPaise"] == 50000
         assert body["history"] == []
 
+        await verify_bank("restaurant", restaurant_id)
         await client.post(
             f"/api/v1/admin/finance/payouts/{payout_id}/paid", json={"reference": "UTR11223344"}, headers=admin
         )
@@ -748,6 +774,7 @@ class TestPartyViews:
         assert await schedule.run(today=today + datetime.timedelta(days=7)) == 2, "the rider and the restaurant"
         assert await cash.in_hand(partner_id) == order["totalPaise"]
 
+        await verify_bank("delivery_partner", partner_id)
         payout_id = await fetchval("select id from payouts where partner_id = $1", partner_id)
         await client.post(
             f"/api/v1/admin/finance/payouts/{payout_id}/paid", json={"reference": "UTR55667788"}, headers=admin

@@ -244,6 +244,9 @@ class OfferFields(BaseModel):
     validFrom: Optional[datetime.datetime] = None
     validUntil: Optional[datetime.datetime] = None
     isActive: Optional[bool] = None
+    # Who pays for the discount: the restaurant (taken off its payout) or the
+    # bank or card issuer (recorded only).
+    fundedBy: Optional[Literal["restaurant", "bank"]] = None
 
     @field_validator("code")
     @classmethod
@@ -282,6 +285,7 @@ class CreateOfferBody(OfferFields):
     firstOrderOnly: bool = False
     perUserLimit: int = Field(default=1, ge=1, le=100)
     isActive: bool = True
+    fundedBy: Literal["restaurant", "bank"] = "restaurant"
 
 
 class UpdateOfferBody(OfferFields):

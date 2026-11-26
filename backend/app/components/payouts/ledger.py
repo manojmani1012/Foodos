@@ -1,8 +1,9 @@
 """The earnings ledger: one row per thing that changes what Foodos owes a
 restaurant or a rider.
 
-    restaurant  order           food + packaging - commission - GST on it - TDS
-    rider       delivery        base + distance + incentives + tip
+    restaurant  order           food + packaging - coupon the restaurant funds - commission
+                                - gateway fee - GST on both fees - TDS
+    rider       delivery        base + distance + incentives - TDS + tip
     rider       cash_collected  minus the bill of a cash order (Foodos's money in their pocket)
     rider       cash_deposit    plus cash handed over to Foodos
     either      refund          minus a partial refund charged to them
@@ -141,7 +142,7 @@ async def record_order(connection: asyncpg.Connection, order_id: uuid.UUID) -> i
     row = await connection.fetchrow(
         """
         select o.id, o.status, o.is_test, o.restaurant_id, o.subtotal_paise, o.packaging_fee_paise,
-               o.total_paise, o.payment_method, coalesce(o.delivered_at, d.delivered_at) as delivered_at,
+               o.total_paise, o.payment_method, o.discount_paise, o.discount_funded_by, coalesce(o.delivered_at, d.delivered_at) as delivered_at,
                r.commission_pct,
                d.partner_id, d.status as delivery_status, d.base_earning_paise, d.base_pay_paise,
                d.distance_pay_paise, d.incentive_paise, d.order_incentive_paise, d.tip_paise,
@@ -158,22 +159,21 @@ async def record_order(connection: asyncpg.Connection, order_id: uuid.UUID) -> i
     if row is None or row["status"] != "delivered" or row["is_test"] or row["delivered_at"] is None:
         return 0
 
-    settings = payment_settings.current()
     moment = ("$2::timestamptz", (row["delivered_at"],))
     written = 0
 
     food, packaging = row["subtotal_paise"], row["packaging_fee_paise"]
     pct = float(row["commission_pct"])
-    commission = payment_settings.percent_of(food, pct)
-    gst = payment_settings.percent_of(commission, settings["gstOnCommissionPct"])
-    tds = payment_settings.percent_of(food + packaging, settings["restaurantTdsPct"])
+    share = payment_settings.restaurant_share(
+        food, packaging, pct, row["discount_paise"], row["discount_funded_by"], row["payment_method"]
+    )
 
     if await _insert(
         connection,
         party_type="restaurant",
         party_id=row["restaurant_id"],
         kind="order",
-        amount=food + packaging - commission - gst - tds,
+        amount=share["amountPaise"],
         source=f"order:{order_id}:restaurant",
         moment_sql=moment[0],
         moment_args=moment[1],
@@ -182,9 +182,13 @@ async def record_order(connection: asyncpg.Connection, order_id: uuid.UUID) -> i
             "foodPaise": food,
             "packagingPaise": packaging,
             "commissionPct": pct,
-            "commissionPaise": commission,
-            "gstOnCommissionPaise": gst,
-            "tdsPaise": tds,
+            "commissionBasePaise": share["commissionBasePaise"],
+            "commissionPaise": share["commissionPaise"],
+            "gatewayFeePaise": share["gatewayFeePaise"],
+            "gstOnCommissionPaise": share["gstOnCommissionPaise"],
+            "tdsPaise": share["tdsPaise"],
+            "discountPaise": share["discountPaise"],
+            "bankOfferPaise": share["bankOfferPaise"],
         },
     ):
         written += 1
@@ -198,12 +202,15 @@ async def record_order(connection: asyncpg.Connection, order_id: uuid.UUID) -> i
     distance = (row["distance_pay_paise"] or 0) if split else 0
     km = row["total_distance_km"]
 
+    # TDS is on pay without tips.
+    rider_tds = payment_settings.rider_tds(row["base_earning_paise"], row["incentive_paise"])
+
     if await _insert(
         connection,
         party_type="delivery_partner",
         party_id=row["partner_id"],
         kind="delivery",
-        amount=row["base_earning_paise"] + row["incentive_paise"] + row["tip_paise"],
+        amount=row["base_earning_paise"] + row["incentive_paise"] - rider_tds + row["tip_paise"],
         source=f"order:{order_id}:rider",
         moment_sql=moment[0],
         moment_args=moment[1],
@@ -216,6 +223,7 @@ async def record_order(connection: asyncpg.Connection, order_id: uuid.UUID) -> i
             "incentivePaise": row["incentive_paise"],
             "orderIncentivePaise": row["order_incentive_paise"],
             "tipPaise": row["tip_paise"],
+            "tdsPaise": rider_tds,
             "distanceKm": float(km) if km is not None else None,
         },
     ):

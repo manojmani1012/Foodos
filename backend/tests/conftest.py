@@ -62,7 +62,7 @@ TEST_DB_NAME = "foodos_test"
 TRUNCATE_SQL = (
     "truncate refresh_tokens, user_roles, delivery_partners, otp_codes, "
     "restaurants, offers, orders, customer_addresses, payment_webhook_events, "
-    "payout_batches, payout_holidays, platform_settings, "
+    "payout_batches, payout_holidays, platform_settings, rider_payout_accounts, "
     "users cascade"
 )
 

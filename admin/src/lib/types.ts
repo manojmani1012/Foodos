@@ -146,6 +146,8 @@ export type Rider = Omit<RiderRow, 'deliveries' | 'deliveriesToday' | 'carryingO
     deliveries: number
     deliveriesLast7Days: number
     earnedPaiseLast7Days: number
+    // TDS deducted from those earnings, when the API reports it.
+    tdsPaiseLast7Days?: number
     distanceKmLast7Days: number
     cashHeldTodayPaise: number
   }
@@ -160,6 +162,8 @@ export type Rider = Omit<RiderRow, 'deliveries' | 'deliveriesToday' | 'carryingO
   // Fake GPS seen on their phone: times (one per 10 minutes of use).
   fakeGps: { count: number; lastSeenAt: string | null }
   documents: RiderDocument[]
+  // Where Foodos sends the rider's money; bank or UPI. Full account number.
+  payoutAccount?: PayoutAccount | null
   recentDeliveries: {
     id: string
     status: string
@@ -251,6 +255,8 @@ export type Order = {
   isTest: boolean
   commissionPaise: number
   commissionPct: number
+  // Foodos's payment-gateway fee on the order, when the API reports it.
+  gatewayFeePaise?: number
   payments: {
     provider: string
     method: string
@@ -364,6 +370,8 @@ export type Offer = {
   maxDiscountPaise: number | null
   minOrderPaise: number
   firstOrderOnly: boolean
+  // Who pays for the discount: the restaurant, or a bank / card partner.
+  fundedBy?: 'restaurant' | 'bank'
   restaurant: { id: string; name: string } | null
   usageLimit: number | null
   perUserLimit: number
@@ -384,7 +392,11 @@ export type PayoutStatus = 'pending' | 'scheduled' | 'on_hold' | 'processing' | 
 export type PaymentSettings = {
   commissionStandardPct: number
   commissionSubscriptionPct: number
+  paymentGatewayFeePct?: number
+  // Whether the restaurant's coupon discount is taken off before commission is worked out.
+  commissionBase?: 'before_discount' | 'after_discount'
   gstOnCommissionPct: number
+  riderTdsPct?: number
   restaurantTdsPct: number
   riderBasePaise: number
   riderBaseKm: number
@@ -408,7 +420,7 @@ export type CountAndAmount = { count: number; netPaise: number }
 export type FinanceOverview = {
   period: { from: string; to: string }
   collections: { onlinePaise: number; walletPaise: number; cashPaise: number; totalPaise: number; refundsPaise: number }
-  commission: { commissionPaise: number; gstOnCommissionPaise: number; deliveryFeesPaise: number }
+  commission: { commissionPaise: number; gatewayFeePaise?: number; gstOnCommissionPaise: number; deliveryFeesPaise: number }
   payable: { restaurantsPaise: number; ridersPaise: number; riderOwesPaise: number }
   payouts: {
     scheduled: CountAndAmount
@@ -416,9 +428,12 @@ export type FinanceOverview = {
     failed: CountAndAmount
     paid: CountAndAmount
     dueToday: CountAndAmount
+    blocked?: CountAndAmount
   }
   nextPayDates: { date: string; count: number; netPaise: number }[]
 }
+
+export type PayoutBlocker = 'bank_missing' | 'bank_pending' | 'bank_rejected'
 
 export type PayoutRow = {
   id: string
@@ -439,6 +454,7 @@ export type PayoutRow = {
   holdReason: string | null
   failureReason: string | null
   bank: { verified: boolean; summary: string | null }
+  blocker?: PayoutBlocker | null
   entryCount: number
 }
 
@@ -534,4 +550,16 @@ export type SupportTicketRow = {
 export type SupportTicket = SupportTicketRow & {
   resolvedAt: string | null
   messages: { id: string; fromSupport: boolean; author: string | null; body: string; internal: boolean; createdAt: string }[]
+}
+
+export type PayoutBatch = {
+  id: string
+  payDate: string
+  periodStart: string
+  periodEnd: string
+  holdReason: string | null
+  counts: { scheduled: number; on_hold: number; failed: number; paid: number; cancelled: number; processing: number }
+  payoutCount: number
+  netPaise: number
+  blockedCount: number
 }

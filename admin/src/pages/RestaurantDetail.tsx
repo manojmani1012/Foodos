@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import MapPicker from '../components/Map'
+import { PayoutAccountCard } from '../components/PayoutAccountCard'
 import {
   Badge,
   Card,
@@ -15,7 +16,7 @@ import {
   Tabs,
 } from '../components/ui'
 import { api, mediaUrl } from '../lib/api'
-import { BANK_STATUS, formatDateTime, formatMoney, formatPhone, ORDER_STATUS, RESTAURANT_STATUS, timeAgo } from '../lib/format'
+import { formatDateTime, formatMoney, formatPhone, ORDER_STATUS, RESTAURANT_STATUS, timeAgo } from '../lib/format'
 import { useToast } from '../lib/toast'
 import type { Activity, MenuCategory, Restaurant } from '../lib/types'
 
@@ -23,90 +24,6 @@ const PLAN: Record<string, string> = { standard: 'Standard plan', subscription: 
 import { useLoad } from '../lib/useLoad'
 
 type Action = { status: 'active' | 'suspended' | 'rejected'; title: string; label: string; danger?: boolean; body: string }
-
-// Where the owner's payouts go. The owner enters it in the Restaurant app;
-// Foodos checks it (a call, a cancelled cheque) before money is sent.
-function BankCard({ restaurant, onChanged }: { restaurant: Restaurant; onChanged: (restaurant: Restaurant) => void }) {
-  const toast = useToast()
-  const [deciding, setDeciding] = useState<'verify' | 'reject' | null>(null)
-  const account = restaurant.payoutAccount
-
-  async function decide(reason: string) {
-    const approve = deciding === 'verify'
-    const result = await api<{ restaurant: Restaurant }>(`/api/v1/admin/restaurants/${restaurant.id}/payout-account/verify`, {
-      method: 'POST',
-      body: approve ? { approve } : { approve, reason },
-    })
-    onChanged(result.restaurant)
-    toast(approve ? 'Bank details verified' : 'Bank details rejected. The owner is asked to fix them')
-  }
-
-  return (
-    <Card
-      title="Bank details for payouts"
-      actions={account && <StatusBadge map={BANK_STATUS} value={account.status} />}
-    >
-      {!account ? (
-        <p className="muted">
-          Not added yet. The owner adds them in the Restaurant app under Payouts. Payouts can still be scheduled, but staff need
-          these details to send the money.
-        </p>
-      ) : (
-        <>
-          {account.status === 'rejected' && account.rejectReason && (
-            <div className="notice notice-danger">Rejected: {account.rejectReason}</div>
-          )}
-          <Details
-            rows={[
-              ['Account holder', account.holder],
-              ['Account number', account.accountNumber ? <span key="a" className="mono">{account.accountNumber}</span> : null],
-              ['IFSC', account.ifsc ? <span key="i" className="mono">{account.ifsc}</span> : null],
-              ['Bank', account.bankName],
-              ['UPI ID', account.upiId ? <span key="u" className="mono">{account.upiId}</span> : null],
-              ['Last changed', account.updatedAt ? formatDateTime(account.updatedAt) : null],
-            ]}
-          />
-          {account.status !== 'verified' && (
-            <p className="muted small">
-              Check the details with the owner (a cancelled cheque or bank statement) before verifying.
-            </p>
-          )}
-          <div className="row-gap">
-            {account.status !== 'verified' && (
-              <button className="btn btn-small btn-primary" onClick={() => setDeciding('verify')}>
-                Verify
-              </button>
-            )}
-            {account.status !== 'rejected' && (
-              <button className="btn btn-small btn-danger" onClick={() => setDeciding('reject')}>
-                Reject
-              </button>
-            )}
-          </div>
-        </>
-      )}
-
-      {deciding && (
-        <ConfirmDialog
-          title={deciding === 'verify' ? 'Verify these bank details?' : 'Reject these bank details?'}
-          body={
-            <p>
-              {deciding === 'verify'
-                ? 'Payouts to this restaurant will no longer carry the unverified warning. If the owner changes the details later, they need checking again.'
-                : 'The owner sees the reason in the Restaurant app and can correct the details.'}
-            </p>
-          }
-          confirmLabel={deciding === 'verify' ? 'Verify' : 'Reject'}
-          danger={deciding === 'reject'}
-          reasonLabel={deciding === 'reject' ? 'What is wrong' : undefined}
-          reasonHint="The owner sees this."
-          onConfirm={decide}
-          onClose={() => setDeciding(null)}
-        />
-      )}
-    </Card>
-  )
-}
 
 function actionsFor(restaurant: Restaurant): Action[] {
   const live: Action = {
@@ -273,7 +190,7 @@ export default function RestaurantDetail() {
                         ['GSTIN', restaurant.gstNumber],
                         [
                           'Commission',
-                          `${restaurant.commissionPct}% of food value${restaurant.commissionPlan ? ` · ${PLAN[restaurant.commissionPlan] || restaurant.commissionPlan}` : ''}`,
+                          `${restaurant.commissionPct}% of food + packaging${restaurant.commissionPlan ? ` · ${PLAN[restaurant.commissionPlan] || restaurant.commissionPlan}` : ''}`,
                         ],
                         ['Preparation time', `${restaurant.avgPrepMinutes} min`],
                         ['Delivers within', restaurant.deliveryRadiusKm !== null ? `${restaurant.deliveryRadiusKm} km of the pin` : '7 km of the pin (Foodos default)'],
@@ -289,7 +206,7 @@ export default function RestaurantDetail() {
                 </div>
 
                 <div className="stack">
-                  <BankCard restaurant={restaurant} onChanged={state.setData} />
+                  <PayoutAccountCard kind="restaurant" partyId={restaurant.id} account={restaurant.payoutAccount} onChanged={state.setData} />
                   <Card title="Cover photo">
                     {restaurant.imageUrl ? (
                       <img className="cover" src={mediaUrl(restaurant.imageUrl)!} alt={`${restaurant.name} cover`} />

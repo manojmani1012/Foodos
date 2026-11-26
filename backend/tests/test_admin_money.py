@@ -137,8 +137,8 @@ class TestPayouts:
         line = statement["lines"][0]
         food = order["subtotalPaise"]
         packaging = order["packagingFeePaise"]
-        # The standard plan: 22% of the food.
-        commission = round(food * 0.22)
+        # The standard plan: 20% of food + packaging (a cash order, so no gateway fee).
+        commission = round((food + packaging) * 0.20)
 
         assert statement["canRecord"] is True
         assert line["count"] == 1

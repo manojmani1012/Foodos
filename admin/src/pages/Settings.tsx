@@ -11,8 +11,11 @@ type Group = { days: number[]; payWeekday: number }
 type Form = {
   commissionStandardPct: string
   commissionSubscriptionPct: string
+  paymentGatewayFeePct: string
+  commissionBase: 'before_discount' | 'after_discount'
   gstOnCommissionPct: string
   restaurantTdsPct: string
+  riderTdsPct: string
   riderBase: string
   riderBaseKm: string
   riderPerKm: string
@@ -33,8 +36,11 @@ function toForm(settings: PaymentSettings): Form {
   return {
     commissionStandardPct: String(settings.commissionStandardPct),
     commissionSubscriptionPct: String(settings.commissionSubscriptionPct),
+    paymentGatewayFeePct: String(settings.paymentGatewayFeePct ?? 2),
+    commissionBase: settings.commissionBase ?? 'before_discount',
     gstOnCommissionPct: String(settings.gstOnCommissionPct),
     restaurantTdsPct: String(settings.restaurantTdsPct),
+    riderTdsPct: String(settings.riderTdsPct ?? 0),
     riderBase: rupees(settings.riderBasePaise),
     riderBaseKm: String(settings.riderBaseKm),
     riderPerKm: rupees(settings.riderPerKmPaise),
@@ -253,8 +259,11 @@ function SettingsForm({ settings, onSaved }: { settings: PaymentSettings; onSave
       ...settings,
       commissionStandardPct: number(form.commissionStandardPct),
       commissionSubscriptionPct: number(form.commissionSubscriptionPct),
+      paymentGatewayFeePct: number(form.paymentGatewayFeePct),
+      commissionBase: form.commissionBase,
       gstOnCommissionPct: number(form.gstOnCommissionPct),
       restaurantTdsPct: number(form.restaurantTdsPct),
+      riderTdsPct: number(form.riderTdsPct),
       riderBasePaise: toPaise(form.riderBase),
       riderBaseKm: number(form.riderBaseKm),
       riderPerKmPaise: toPaise(form.riderPerKm),
@@ -304,8 +313,8 @@ function SettingsForm({ settings, onSaved }: { settings: PaymentSettings; onSave
       <Card title="Restaurant commission and tax">
         <div className="form-grid two">
           <Field
-            label="Standard commission (%)"
-            hint="Restaurants on the standard plan. Changing it updates every standard restaurant."
+            label="Foodos commission, standard plan (%)"
+            hint="Taken on food + packaging. Restaurants on the standard plan. Changing it updates every standard restaurant."
             error={fieldErrors.commissionStandardPct}
           >
             {(id) => (
@@ -313,8 +322,8 @@ function SettingsForm({ settings, onSaved }: { settings: PaymentSettings; onSave
             )}
           </Field>
           <Field
-            label="Subscription commission (%)"
-            hint="Restaurants on the subscription plan. Restaurants with a custom rate keep theirs."
+            label="Foodos commission, subscription plan (%)"
+            hint="Taken on food + packaging. Restaurants on the subscription plan. Restaurants with a custom rate keep theirs."
             error={fieldErrors.commissionSubscriptionPct}
           >
             {(id) => (
@@ -322,8 +331,29 @@ function SettingsForm({ settings, onSaved }: { settings: PaymentSettings; onSave
             )}
           </Field>
           <Field
+            label="Payment gateway fee (%)"
+            hint="Charged to the restaurant on food + packaging of online-paid orders. Not charged on cash orders."
+            error={fieldErrors.paymentGatewayFeePct}
+          >
+            {(id) => (
+              <input id={id} className="input" type="number" min={0} max={100} step={0.1} value={form.paymentGatewayFeePct} onChange={(e) => set('paymentGatewayFeePct', e.target.value)} />
+            )}
+          </Field>
+          <Field
+            label="Commission is worked out"
+            hint="Pending the client's decision. Only affects orders that use a restaurant-paid coupon."
+            error={fieldErrors.commissionBase}
+          >
+            {(id) => (
+              <select id={id} className="input" value={form.commissionBase} onChange={(e) => set('commissionBase', e.target.value as Form['commissionBase'])}>
+                <option value="before_discount">Before the restaurant coupon discount</option>
+                <option value="after_discount">After the restaurant coupon discount</option>
+              </select>
+            )}
+          </Field>
+          <Field
             label="GST on commission (%)"
-            hint={`Charged to the restaurant on Foodos's commission, taken off their payout. ${caNote}`}
+            hint={`Charged on commission + gateway fee, taken off the restaurant's payout. ${caNote}`}
             error={fieldErrors.gstOnCommissionPct}
           >
             {(id) => (
@@ -361,11 +391,20 @@ function SettingsForm({ settings, onSaved }: { settings: PaymentSettings; onSave
               <input id={id} className="input" inputMode="decimal" value={form.riderOrderIncentive} onChange={(e) => set('riderOrderIncentive', e.target.value)} />
             )}
           </Field>
+          <Field
+            label="TDS on riders (%)"
+            hint="Deducted from base pay, distance pay and incentives. Not charged on tips. Confirm with your CA."
+            error={fieldErrors.riderTdsPct}
+          >
+            {(id) => (
+              <input id={id} className="input" type="number" min={0} max={100} step={0.1} value={form.riderTdsPct} onChange={(e) => set('riderTdsPct', e.target.value)} />
+            )}
+          </Field>
           <Field label="Distance counted" error={fieldErrors.riderDistanceBasis}>
             {(id) => (
               <select id={id} className="input" value={form.riderDistanceBasis} onChange={(e) => set('riderDistanceBasis', e.target.value as Form['riderDistanceBasis'])}>
+                <option value="drop">Restaurant to customer only (client's rule)</option>
                 <option value="trip">Whole trip: rider to restaurant, then to the customer</option>
-                <option value="drop">Restaurant to customer only</option>
               </select>
             )}
           </Field>
@@ -389,7 +428,7 @@ function SettingsForm({ settings, onSaved }: { settings: PaymentSettings; onSave
         <div className="form-grid two">
           <Field
             label="Business day starts at"
-            hint="India time. With 04:00, a 2 am Tuesday delivery counts for Monday."
+            hint="India time. The client's day runs 5:30 AM to 5:29 AM, so set 05:30."
             error={fieldErrors.cutoffTime}
           >
             {(id) => <input id={id} className="input" type="time" value={form.cutoffTime} onChange={(e) => set('cutoffTime', e.target.value)} />}

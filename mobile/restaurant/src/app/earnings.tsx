@@ -41,7 +41,9 @@ function planLine(plan: PayoutsOverview['plan']): string {
         ? 'Your agreed plan'
         : 'Standard plan'
 
-  return `${name} · ${plan.commissionPct}% commission on food`
+  const fee = plan.gatewayFeePct ? ` + ${plan.gatewayFeePct}% payment fee` : ''
+
+  return `${name} · ${plan.commissionPct}% commission${fee}, charged on food + packaging`
 }
 
 export default function EarningsScreen() {
@@ -154,10 +156,23 @@ export default function EarningsScreen() {
               <View style={styles.breakdown}>
                 <Line label="Food sales" value={formatRupees(totals.foodPaise)} />
                 <Line label="Packaging charges" value={formatRupees(totals.packagingPaise)} />
+                {totals.discountPaise ? (
+                  <Line label="Coupons paid by you" value={`− ${formatRupees(totals.discountPaise)}`} />
+                ) : null}
                 <Line
-                  label={`Foodos commission (${earnings?.commissionPct ?? 0}% of food)`}
+                  label={`Foodos commission (${earnings?.commissionPct ?? 0}% on food + packaging)`}
                   value={`− ${formatRupees(totals.commissionPaise)}`}
                 />
+                <Line
+                  label={
+                    earnings?.gatewayFeePct ? `Payment gateway fee (${earnings.gatewayFeePct}%)` : 'Payment gateway fee'
+                  }
+                  value={`− ${formatRupees(totals.gatewayFeePaise ?? 0)}`}
+                />
+                {totals.gstOnCommissionPaise ? (
+                  <Line label="GST on these fees" value={`− ${formatRupees(totals.gstOnCommissionPaise)}`} />
+                ) : null}
+                {totals.tdsPaise ? <Line label="TDS" value={`− ${formatRupees(totals.tdsPaise)}`} /> : null}
                 <View style={styles.divider} />
                 <Line label="You keep" value={formatRupees(totals.earningsPaise)} strong />
               </View>
@@ -191,7 +206,7 @@ export default function EarningsScreen() {
                 </Text>
                 <Text style={styles.bankBannerText}>
                   {!account
-                    ? 'Foodos needs a bank account or UPI id to send your money.'
+                    ? 'Foodos needs a bank account to send your money.'
                     : account.status === 'rejected'
                       ? account.rejectReason || 'Please check and update them.'
                       : 'Foodos checks new details before the first payout to them.'}

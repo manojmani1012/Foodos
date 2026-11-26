@@ -121,6 +121,8 @@ export type Earnings = {
     tipsPaise: number
     earningsPaise: number
     distanceKm: number
+    // TDS deducted on these earnings (not on tips). Absent on older servers.
+    tdsPaise?: number
   }
   daily: {
     date: string
@@ -131,6 +133,7 @@ export type Earnings = {
     earningsPaise: number
     tipsPaise: number
     distanceKm: number
+    tdsPaise?: number
   }[]
   cashCollectedTodayPaise: number
   cash: CashInHand
@@ -148,6 +151,8 @@ export type PayoutBreakdown = {
   distancePaise?: number
   incentivePaise?: number
   tipsPaise?: number
+  // TDS deducted from base, distance and incentives (positive = deducted).
+  tdsPaise?: number
   cashCollectedPaise?: number
   cashDepositedPaise?: number
   adjustmentsPaise?: number
@@ -379,6 +384,71 @@ export async function fetchEarnings(days: number): Promise<Earnings> {
   const { ok, ...earnings } = await request(`${BASE}/earnings?days=${days}`)
 
   return earnings as Earnings
+}
+
+export type TdsMonth = { month: string; earningsPaise: number; tdsPaise: number }
+
+export type TdsSummary = {
+  financialYear: string
+  // Pay excluding tips.
+  earningsPaise: number
+  tdsPaise: number
+  months: TdsMonth[]
+}
+
+// `fy` is the year the financial year starts (2026 = 2026-27); default is the current one.
+export async function fetchTds(fy?: number): Promise<TdsSummary> {
+  const { ok, ...tds } = await request(`${BASE}/tds${fy ? `?fy=${fy}` : ''}`)
+
+  return { ...tds, months: tds.months ?? [] } as TdsSummary
+}
+
+// --- Payout account --------------------------------------------------------
+
+export type PayoutAccountStatus = 'pending' | 'verified' | 'rejected'
+
+export type PayoutAccount = {
+  holder: string | null
+  accountNumberMasked: string | null
+  ifsc: string | null
+  bankName: string | null
+  upiId: string | null
+  status: PayoutAccountStatus
+  rejectReason: string | null
+  updatedAt: string | null
+}
+
+// Partial body: a key left out is kept, null removes it.
+export type PayoutAccountChanges = Partial<{
+  holder: string | null
+  accountNumber: string | null
+  ifsc: string | null
+  bankName: string | null
+  upiId: string | null
+}>
+
+export async function fetchPayoutAccount(): Promise<PayoutAccount | null> {
+  const { account } = await request(`${BASE}/payout-account`)
+
+  return account ?? null
+}
+
+export async function savePayoutAccount(changes: PayoutAccountChanges): Promise<PayoutAccount> {
+  const { account } = await request(`${BASE}/payout-account`, { method: 'PUT', body: changes })
+
+  return account
+}
+
+export const IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/
+export const ACCOUNT_NUMBER_PATTERN = /^\d{9,18}$/
+export const UPI_PATTERN = /^[\w.\-]{2,}@[a-zA-Z]{2,}$/
+
+export function payoutAccountStatusLabel(account: PayoutAccount | null): string {
+  if (!account) return 'Not added yet'
+  if (account.status === 'verified') return 'Verified'
+  if (account.status === 'rejected') return 'Rejected, please check and update'
+
+  return 'Pending check by Foodos'
 }
 
 export async function fetchHistory(): Promise<Delivery[]> {

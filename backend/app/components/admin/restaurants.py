@@ -548,6 +548,14 @@ async def menu(restaurant_id: str) -> list[dict]:
     return list(categories.values())
 
 
+async def save_payout_account(restaurant_id: str, body: Any, actor_id: uuid.UUID, ip: Optional[str]) -> dict:
+    """Staff enter or correct the bank details; they go back to pending."""
+    identifier = as_uuid(restaurant_id)
+    await payout_accounts.admin_save_restaurant(identifier, body, actor_id, ip)
+
+    return await get_restaurant(str(identifier))
+
+
 async def verify_payout_account(
     restaurant_id: str, approve: bool, reason: Optional[str], actor_id: uuid.UUID, ip: Optional[str]
 ) -> dict:

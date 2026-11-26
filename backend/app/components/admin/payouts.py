@@ -21,6 +21,7 @@ from typing import Any, Optional
 
 from ...database import fetch, fetchval
 from ...errors import bad_request
+from ..payouts import settings as payment_settings
 
 PARTY_LABEL = {"restaurant": "Restaurants", "delivery_partner": "Riders"}
 MAX_PERIOD_DAYS = 92
@@ -38,45 +39,66 @@ async def _restaurant_lines(start: datetime.date, end: datetime.date, party_id: 
     rows = await fetch(
         """
         select r.id, r.name, r.commission_pct, u.full_name as owner_name, u.phone as owner_phone,
-               count(o.id)::int as orders,
-               sum(o.subtotal_paise)::bigint as food,
-               sum(o.packaging_fee_paise)::bigint as packaging
+               o.subtotal_paise, o.packaging_fee_paise, o.discount_paise, o.discount_funded_by, o.payment_method
         from orders o
         join restaurants r on r.id = o.restaurant_id
         join users u on u.id = r.owner_id
         where o.status = 'delivered' and not o.is_test
           and o.placed_at::date between $1 and $2
           and ($3::uuid is null or r.id = $3)
-        group by r.id, u.full_name, u.phone
-        order by r.name
+        order by r.name, o.placed_at
         """,
         start,
         end,
         party_id,
     )
 
-    lines = []
+    # Worked out per order, exactly as the payout ledger does.
+    grouped: dict = {}
 
     for row in rows:
-        food, packaging = int(row["food"]), int(row["packaging"])
-        # Rounded on the total, exactly as the restaurant app's Earnings does.
-        commission = round(food * float(row["commission_pct"]) / 100)
+        line = grouped.setdefault(
+            row["id"],
+            {
+                "row": row,
+                "count": 0,
+                "food": 0,
+                "packaging": 0,
+                "fees": 0,
+                "other": 0,
+            },
+        )
+        share = payment_settings.restaurant_share(
+            row["subtotal_paise"], row["packaging_fee_paise"], float(row["commission_pct"]), row["discount_paise"],
+            row["discount_funded_by"], row["payment_method"],
+        )
+        line["count"] += 1
+        line["food"] += row["subtotal_paise"]
+        line["packaging"] += row["packaging_fee_paise"]
+        line["fees"] += share["commissionPaise"] + share["gatewayFeePaise"] + share["gstOnCommissionPaise"]
+        line["other"] += share["discountPaise"] + share["tdsPaise"]
+
+    lines = []
+
+    for line in grouped.values():
+        row = line["row"]
+        gross = line["food"] + line["packaging"]
 
         lines.append(
             {
                 "partyId": str(row["id"]),
                 "name": row["name"],
                 "contact": {"name": row["owner_name"], "phone": row["owner_phone"]},
-                "count": row["orders"],
+                "count": line["count"],
                 "breakdown": {
-                    "foodPaise": food,
-                    "packagingPaise": packaging,
+                    "foodPaise": line["food"],
+                    "packagingPaise": line["packaging"],
                     "commissionPct": float(row["commission_pct"]),
                 },
-                "grossPaise": food + packaging,
-                "commissionPaise": commission,
-                "adjustmentsPaise": 0,
-                "netPaise": food + packaging - commission,
+                "grossPaise": gross,
+                "commissionPaise": line["fees"],
+                "adjustmentsPaise": -line["other"],
+                "netPaise": gross - line["fees"] - line["other"],
             }
         )
 

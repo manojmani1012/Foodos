@@ -23,19 +23,28 @@ from ...errors import bad_request
 from ..admin import audit
 
 DEFAULTS: dict[str, Any] = {
-    "commissionStandardPct": 22,
+    # Commission is on food + packaging. "22% + tax" is 20% commission plus a
+    # 2% payment-gateway fee; "12%" is 10% plus the same 2%.
+    "commissionStandardPct": 20,
     "commissionSubscriptionPct": 10,
+    "paymentGatewayFeePct": 2,
+    # Whether commission is worked out before or after the restaurant-funded
+    # coupon comes off. Undecided with the client, so it is a setting.
+    "commissionBase": "before_discount",
     # GST on Foodos's commission and TDS under 194-O: 0 until the client's CA
     # confirms the rates (likely 18% and 1%).
     "gstOnCommissionPct": 0,
     "restaurantTdsPct": 0,
+    # TDS on rider pay (base + distance + incentives, never tips): compulsory,
+    # rate pending the CA.
+    "riderTdsPct": 0,
     "riderBasePaise": 2000,
     "riderBaseKm": 3,
     "riderPerKmPaise": 800,
     "riderOrderIncentivePaise": 1000,
     # 'trip': rider to restaurant plus restaurant to customer; 'drop': the
-    # restaurant-to-customer leg only.
-    "riderDistanceBasis": "trip",
+    # restaurant-to-customer leg only (what the client wants).
+    "riderDistanceBasis": "drop",
     # ISO weekdays, 1 = Monday. Mon+Tue are paid Thursday, Wed+Thu next
     # Monday, Fri to Sun next Tuesday.
     "payoutSchedule": [
@@ -43,7 +52,8 @@ DEFAULTS: dict[str, Any] = {
         {"days": [3, 4], "payWeekday": 1},
         {"days": [5, 6, 7], "payWeekday": 2},
     ],
-    "cutoffTime": "00:00",
+    # The earnings day runs 05:30 to 05:29 the next morning.
+    "cutoffTime": "05:30",
     "minPayoutPaise": 10000,
     "refundChargedToDefault": "restaurant",
     # When staff pay on a payout day. Shown in the apps; nothing runs at it.
@@ -87,8 +97,11 @@ class PaymentSettings(BaseModel):
 
     commissionStandardPct: float = Field(ge=0, le=100)
     commissionSubscriptionPct: float = Field(ge=0, le=100)
+    paymentGatewayFeePct: float = Field(default=2, ge=0, le=100)
+    commissionBase: Literal["before_discount", "after_discount"] = "before_discount"
     gstOnCommissionPct: float = Field(ge=0, le=100)
     restaurantTdsPct: float = Field(ge=0, le=100)
+    riderTdsPct: float = Field(default=0, ge=0, le=100)
     riderBasePaise: int = Field(ge=0, le=100_000)
     riderBaseKm: float = Field(ge=0, le=50)
     riderPerKmPaise: int = Field(ge=0, le=10_000)
@@ -162,6 +175,54 @@ def cutoff() -> datetime.timedelta:
 def percent_of(amount: int, pct: float) -> int:
     """Money arithmetic rounds half up, to whole paise."""
     return int((Decimal(amount) * Decimal(str(pct)) / 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
+def restaurant_share(
+    food: int,
+    packaging: int,
+    commission_pct: float,
+    discount_paise: int = 0,
+    funded_by: str = "restaurant",
+    payment_method: str = "upi",
+) -> dict:
+    """What a delivered order earns the restaurant, by the current settings.
+    The one place the formula lives: the ledger, the partner app, the admin
+    order page, the dashboard and the reports all call it.
+
+    commission and the gateway fee are on food + packaging (less the
+    restaurant-funded coupon under 'after_discount'); cash orders pay no
+    gateway fee; GST is on both fees. A bank offer is never charged to the
+    restaurant, only reported.
+    """
+    settings = _current
+    gross = food + packaging
+    restaurant_discount = discount_paise if funded_by == "restaurant" else 0
+    bank_offer = discount_paise if funded_by == "bank" else 0
+
+    base = gross
+    if settings["commissionBase"] == "after_discount":
+        base = max(0, gross - restaurant_discount)
+
+    commission = percent_of(base, commission_pct)
+    gateway = percent_of(base, settings["paymentGatewayFeePct"]) if payment_method != "cod" else 0
+    gst = percent_of(commission + gateway, settings["gstOnCommissionPct"])
+    tds = percent_of(gross, settings["restaurantTdsPct"])
+
+    return {
+        "commissionBasePaise": base,
+        "commissionPaise": commission,
+        "gatewayFeePaise": gateway,
+        "gstOnCommissionPaise": gst,
+        "tdsPaise": tds,
+        "discountPaise": restaurant_discount,
+        "bankOfferPaise": bank_offer,
+        "amountPaise": gross - restaurant_discount - commission - gateway - gst - tds,
+    }
+
+
+def rider_tds(base_pay: int, incentive: int) -> int:
+    """TDS on rider pay. Tips are the customer's gift and are left out."""
+    return percent_of(base_pay + incentive, _current["riderTdsPct"])
 
 
 def plan_pct(plan: str) -> Optional[float]:

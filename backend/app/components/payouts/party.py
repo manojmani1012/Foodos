@@ -74,7 +74,9 @@ async def overview(party_type: str, party_id: uuid.UUID) -> dict:
     if party_type == "restaurant":
         plan = await fetchrow("select commission_plan, commission_pct from restaurants where id = $1", party_id)
         result = {
-            "plan": {"commissionPlan": plan["commission_plan"], "commissionPct": float(plan["commission_pct"])},
+            "plan": {"commissionPlan": plan["commission_plan"], "commissionPct": float(plan["commission_pct"]),
+                "gatewayFeePct": float(payment_settings.current()["paymentGatewayFeePct"]),
+            },
             **result,
         }
 

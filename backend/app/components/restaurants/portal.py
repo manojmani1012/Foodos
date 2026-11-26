@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 import datetime
 
-from ...database import fetch, fetchrow, transaction
+from ...database import fetch, fetchrow, fetchval, transaction
 from ...errors import conflict, forbidden, not_found
 from ..media import service as media
 from ..delivery import service as delivery
@@ -87,6 +87,8 @@ def restaurant_to_dict(row: Any) -> dict:
         "isAcceptingOrders": row["is_accepting_orders"],
         "avgPrepMinutes": row["avg_prep_minutes"],
         "commissionPct": float(row["commission_pct"]),
+        # The payment-gateway fee on online orders, so the app never hardcodes it.
+        "gatewayFeePct": float(payment_settings.current()["paymentGatewayFeePct"]),
         # 'standard', 'subscription' or 'custom' (a rate agreed with Foodos).
         "commissionPlan": row["commission_plan"],
         "opensAt": row["opens_at"].isoformat() if row["opens_at"] else None,
@@ -655,25 +657,21 @@ async def reviews(restaurant_id: Any, limit: int = 50) -> dict:
 async def earnings(restaurant_id: Any, commission_pct: float, days: int) -> dict:
     """Day-by-day takings for the last `days` days.
 
-    The restaurant's share of an order is its food plus packaging, less the
-    Foodos commission on the food. Tax goes to the government and the delivery
-    fee and tip to Foodos and the rider, so neither counts here. Only delivered
-    orders are earned; orders still moving are reported separately.
+    The restaurant's share of an order is its food plus packaging, less any
+    coupon it funds, the Foodos commission (on food + packaging), the payment
+    gateway fee (online orders only), GST on both fees and TDS: the same
+    formula the payout ledger uses, worked out per order. Tax goes to the
+    government and the delivery fee and tip to Foodos and the rider, so
+    neither counts here. Only delivered orders are earned; orders still moving
+    are reported separately.
     """
-    rows = await fetch(
+    orders = await fetch(
         """
-        with days as (
-          select generate_series(current_date - ($2::int - 1), current_date, interval '1 day')::date as day
-        )
-        select d.day,
-               count(o.id) filter (where o.status = 'delivered')::int as orders,
-               coalesce(sum(o.subtotal_paise) filter (where o.status = 'delivered'), 0)::bigint as food,
-               coalesce(sum(o.packaging_fee_paise) filter (where o.status = 'delivered'), 0)::bigint as packaging
-        from days d
-        left join orders o
-          on o.restaurant_id = $1 and o.placed_at::date = d.day
-        group by d.day
-        order by d.day
+        select o.placed_at::date as day, o.subtotal_paise, o.packaging_fee_paise, o.discount_paise,
+               o.discount_funded_by, o.payment_method
+        from orders o
+        where o.restaurant_id = $1 and o.status = 'delivered'
+          and o.placed_at::date > current_date - $2::int
         """,
         restaurant_id,
         days,
@@ -691,37 +689,49 @@ async def earnings(restaurant_id: Any, commission_pct: float, days: int) -> dict
         days,
     )
 
-    rate = commission_pct / 100
-    settings = payment_settings.current()
+    keys = ("foodPaise", "packagingPaise", "commissionPaise", "gatewayFeePaise", "gstOnCommissionPaise", "tdsPaise",
+            "discountPaise", "bankOfferPaise", "earningsPaise")
+    by_day: dict = {}
 
-    def share(food: int, packaging: int) -> dict:
-        commission = round(food * rate)
-        # GST on the commission and TDS, at the rates in the payment
-        # settings (0 until Foodos's accountant sets them).
-        gst = payment_settings.percent_of(commission, settings["gstOnCommissionPct"])
-        tds = payment_settings.percent_of(int(food + packaging), settings["restaurantTdsPct"])
+    for order in orders:
+        share = payment_settings.restaurant_share(
+            order["subtotal_paise"],
+            order["packaging_fee_paise"],
+            commission_pct,
+            order["discount_paise"],
+            order["discount_funded_by"],
+            order["payment_method"],
+        )
+        line = by_day.setdefault(order["day"], dict.fromkeys(keys, 0) | {"orders": 0})
+        line["orders"] += 1
+        line["foodPaise"] += order["subtotal_paise"]
+        line["packagingPaise"] += order["packaging_fee_paise"]
 
-        return {
-            "foodPaise": int(food),
-            "packagingPaise": int(packaging),
-            "commissionPaise": commission,
-            "gstOnCommissionPaise": gst,
-            "tdsPaise": tds,
-            "earningsPaise": int(food + packaging - commission - gst - tds),
-        }
+        for key, source in (
+            ("commissionPaise", "commissionPaise"),
+            ("gatewayFeePaise", "gatewayFeePaise"),
+            ("gstOnCommissionPaise", "gstOnCommissionPaise"),
+            ("tdsPaise", "tdsPaise"),
+            ("discountPaise", "discountPaise"),
+            ("bankOfferPaise", "bankOfferPaise"),
+            ("earningsPaise", "amountPaise"),
+        ):
+            line[key] += share[source]
 
+    today = await fetchval("select current_date")
     daily = [
-        {"date": row["day"].isoformat(), "orders": row["orders"], **share(row["food"], row["packaging"])}
-        for row in rows
+        {"date": (day := today - datetime.timedelta(days=offset)).isoformat(),
+         **by_day.get(day, dict.fromkeys(keys, 0) | {"orders": 0})}
+        for offset in range(days - 1, -1, -1)
     ]
+    totals = {key: sum(d[key] for d in daily) for key in ("orders", *keys)}
 
     return {
         "days": days,
         "commissionPct": commission_pct,
-        "totals": {
-            "orders": sum(d["orders"] for d in daily),
-            **share(sum(d["foodPaise"] for d in daily), sum(d["packagingPaise"] for d in daily)),
-        },
+        "gatewayFeePct": float(payment_settings.current()["paymentGatewayFeePct"]),
+        "totals": totals,
         "daily": daily,
         "inProgress": {"orders": in_progress["orders"], "foodPaise": int(in_progress["food"])},
     }
+

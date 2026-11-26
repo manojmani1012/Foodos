@@ -21,11 +21,11 @@ import uuid
 from typing import Any, Optional
 
 from ...database import fetch, fetchrow, fetchval, transaction
-from ...errors import bad_request, conflict, not_found
+from ...errors import AppError, bad_request, conflict, not_found
 from ..admin import audit
 from . import dates, notify
 from . import settings as payment_settings
-from .views import PAYOUT_SELECT, payout_row
+from .views import BLOCKED_SQL, PAYOUT_SELECT, blocker, payout_row
 
 logger = logging.getLogger("foodos.payouts")
 
@@ -77,6 +77,13 @@ STATUS_WORDS = {
 }
 
 
+BLOCKER_WORDS = {
+    "bank_missing": "No bank details have been added, so this cannot be paid yet",
+    "bank_pending": "The bank details are not verified yet, so this cannot be paid",
+    "bank_rejected": "The bank details were rejected, so this cannot be paid until they are corrected",
+}
+
+
 async def india_today() -> datetime.date:
     """The calendar date in India (no cutoff): pay dates are calendar days."""
     return await fetchval("select (now() at time zone 'Asia/Kolkata')::date")
@@ -91,11 +98,16 @@ def _totals(party_type: str, rows: list[Any]) -> dict:
 
         if row["kind"] == "order":
             gross += int(b.get("foodPaise", 0)) + int(b.get("packagingPaise", 0))
-            commission += int(b.get("commissionPaise", 0)) + int(b.get("gstOnCommissionPaise", 0))
+            commission += (
+                int(b.get("commissionPaise", 0))
+                + int(b.get("gatewayFeePaise", 0))
+                + int(b.get("gstOnCommissionPaise", 0))
+            )
         elif row["kind"] == "delivery":
-            gross += row["amount_paise"]
+            # Pay before the TDS taken off it; the TDS lands in adjustments.
+            gross += row["amount_paise"] + int(b.get("tdsPaise", 0))
 
-    # Everything that is not earnings less commission: TDS, refunds, cash,
+    # Everything that is not earnings less fees: coupon, TDS, refunds, cash,
     # deposits and adjustments.
     return {
         "net": net,
@@ -302,6 +314,18 @@ async def act(
                 f"{ACTION_PAST[action]}",
             )
 
+        if action == "paid":
+            # Money only goes to an account staff have checked.
+            why = blocker(await connection.fetchrow(f"{PAYOUT_SELECT} where p.id = $1", identifier))
+
+            if why is not None:
+                raise AppError(
+                    409,
+                    "bank_not_verified",
+                    BLOCKER_WORDS[why],
+                    {"blocker": why},
+                )
+
         if action == "hold":
             await connection.execute(
                 "update payouts set status = 'on_hold', hold_reason = $2, updated_at = now() where id = $1",
@@ -378,3 +402,147 @@ async def act(
         await notify.held(identifier)
 
     return await get_row(identifier)
+
+
+# --- Whole-batch controls -----------------------------------------------------
+
+BATCH_STATUSES = ("scheduled", "on_hold", "failed", "paid", "cancelled", "processing")
+
+
+def _batch_row(row: Any) -> dict:
+    return {
+        "id": str(row["id"]),
+        "payDate": row["pay_date"].isoformat(),
+        "periodStart": row["period_start"].isoformat(),
+        "periodEnd": row["period_end"].isoformat(),
+        "holdReason": row["hold_reason"],
+        "counts": {status: row[status] for status in BATCH_STATUSES},
+        "payoutCount": row["payout_count"],
+        "netPaise": int(row["net"]),
+        "blockedCount": row["blocked"],
+    }
+
+
+async def _batches(where: str, *args: Any) -> list[dict]:
+    rows = await fetch(
+        f"""
+        select b.id, b.pay_date, b.period_start, b.period_end, b.hold_reason,
+               {", ".join(f"count(p.id) filter (where p.status = '{s}')::int as {s}" for s in BATCH_STATUSES)},
+               count(p.id)::int as payout_count,
+               coalesce(sum(p.net_paise), 0)::bigint as net,
+               (count(p.id) filter (where p.status in ('scheduled', 'on_hold') and {BLOCKED_SQL}))::int as blocked
+        from payout_batches b
+        left join ({PAYOUT_SELECT}) p on p.batch_id = b.id
+        where {where}
+        group by b.id
+        order by b.pay_date desc, b.period_start desc
+        """,
+        *args,
+    )
+
+    return [_batch_row(row) for row in rows]
+
+
+async def list_batches(status: str) -> dict:
+    # A period with nothing to pay still gets a batch; it is of no interest here.
+    where = "exists (select 1 from payouts x where x.batch_id = b.id)"
+
+    if status != "all":
+        where = "exists (select 1 from payouts x where x.batch_id = b.id and x.status in ('scheduled', 'on_hold'))"
+
+    return {"batches": await _batches(where)}
+
+
+async def _batch(batch_id: uuid.UUID) -> dict:
+    found = await _batches("b.id = $1", batch_id)
+
+    if not found:
+        raise not_found("batch_not_found", "That payout batch could not be found")
+
+    return found[0]
+
+
+def _batch_id(value: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        raise not_found("batch_not_found", "That payout batch could not be found")
+
+
+async def act_on_batch(
+    batch_id: str,
+    action: str,
+    actor_id: uuid.UUID,
+    ip: Optional[str],
+    reason: Optional[str] = None,
+    date: Optional[datetime.date] = None,
+) -> dict:
+    """Hold, release or reschedule every affected payout of a batch at once.
+    Only payouts in a status the single action allows are touched."""
+    identifier = _batch_id(batch_id)
+    reason = (reason or "").strip() or None
+
+    if action == "hold" and (not reason or len(reason) < 3):
+        raise bad_request("reason_required", "Give a reason, so the team knows why later")
+
+    if action == "reschedule":
+        if date is None:
+            raise bad_request("date_required", "Choose the new payout date")
+
+        if date < await india_today():
+            raise bad_request("date_in_past", "Choose today or a later date")
+
+    async with transaction() as connection:
+        # The batch row is the lock: two staff holding at once queue up.
+        if await connection.fetchval("select 1 from payout_batches where id = $1 for update", identifier) is None:
+            raise not_found("batch_not_found", "That payout batch could not be found")
+
+        if action == "hold":
+            rows = await connection.fetch(
+                """
+                update payouts set status = 'on_hold', hold_reason = $2, updated_at = now()
+                where batch_id = $1 and status = 'scheduled' returning id
+                """,
+                identifier,
+                reason,
+            )
+            await connection.execute("update payout_batches set hold_reason = $2 where id = $1", identifier, reason)
+        elif action == "release":
+            rows = await connection.fetch(
+                """
+                update payouts set status = 'scheduled', hold_reason = null, updated_at = now()
+                where batch_id = $1 and status = 'on_hold' returning id
+                """,
+                identifier,
+            )
+            await connection.execute("update payout_batches set hold_reason = null where id = $1", identifier)
+        else:
+            rows = await connection.fetch(
+                """
+                update payouts set scheduled_for = $2, reminded_at = null, updated_at = now()
+                where batch_id = $1 and status in ('scheduled', 'on_hold') returning id
+                """,
+                identifier,
+                date,
+            )
+            await connection.execute("update payout_batches set pay_date = $2 where id = $1", identifier, date)
+
+        await audit.record(
+            actor_id,
+            {"hold": "Held payout batch", "release": "Released payout batch", "reschedule": "Rescheduled payout batch"}[action],
+            "Payouts",
+            "payout_batch",
+            identifier,
+            {"changed": len(rows), "reason": reason, "date": date.isoformat() if date else None},
+            ip,
+            connection,
+        )
+
+    # Phones are told after the change has committed, as for a single payout.
+    for row in rows:
+        if action == "hold":
+            await notify.held(row["id"])
+        elif action == "reschedule":
+            await notify.rescheduled(row["id"])
+
+    return {"batch": await _batch(identifier), "changed": len(rows)}

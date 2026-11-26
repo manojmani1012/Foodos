@@ -45,8 +45,10 @@ KIND_NAMES = {
 RESTAURANT_LINES = [
     ("foodPaise", "Food (item total)", 1),
     ("packagingPaise", "Packaging charges", 1),
+    ("discountPaise", "Coupons paid by you", -1),
     ("commissionPaise", "Foodos commission", -1),
-    ("gstOnCommissionPaise", "GST on commission", -1),
+    ("gatewayFeePaise", "Payment gateway fee", -1),
+    ("gstOnCommissionPaise", "GST on commission and gateway fee", -1),
     ("tdsPaise", "TDS (section 194-O)", -1),
     ("refundsPaise", "Refunds charged to you", -1),
     ("adjustmentsPaise", "Adjustments", 1),
@@ -57,6 +59,7 @@ RIDER_LINES = [
     ("distancePaise", "Distance pay", 1),
     ("incentivePaise", "Incentives", 1),
     ("tipsPaise", "Tips", 1),
+    ("tdsPaise", "TDS deducted", -1),
     ("cashCollectedPaise", "Cash collected from customers", -1),
     ("cashDepositedPaise", "Cash handed over to Foodos", 1),
     ("refundsPaise", "Refunds charged to you", -1),
@@ -142,6 +145,11 @@ async def render(payout_id: uuid.UUID) -> str:
 
         if entry["kind"] == "order":
             parts.append(f"food {_money(b.get('foodPaise', 0))}, commission {b.get('commissionPct', 0):g}%")
+
+            if b.get("discountPaise"):
+                parts.append(f"coupon {_money(b['discountPaise'])} paid by restaurant")
+            if b.get("bankOfferPaise"):
+                parts.append(f"bank offer {_money(b['bankOfferPaise'])} (not charged)")
         elif entry["kind"] == "delivery" and b.get("distanceKm") is not None:
             parts.append(f"{b['distanceKm']:.1f} km")
 
@@ -167,12 +175,16 @@ async def render(payout_id: uuid.UUID) -> str:
 
     bank = ""
 
-    if party_type == "restaurant" and row["account_number"]:
-        bank = f"{e(row['bank_name'] or 'Bank')} account XXXXXX{e(row['account_number'][-4:])}"
-    elif party_type == "restaurant" and row["upi_id"]:
-        bank = f"UPI {e(row['upi_id'])}"
-    elif row["payout_upi_id"]:
-        bank = f"UPI {e(row['payout_upi_id'])}"
+    number, bank_name, upi = (
+        (row["account_number"], row["bank_name"], None)
+        if party_type == "restaurant"
+        else (row["rider_account_number"], row["rider_bank_name"], row["rider_upi_id"])
+    )
+
+    if number:
+        bank = f"{e(bank_name or 'Bank')} account XXXXXX{e(number[-4:])}"
+    elif upi:
+        bank = f"UPI {e(upi)}"
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">

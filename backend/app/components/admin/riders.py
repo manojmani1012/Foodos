@@ -20,6 +20,7 @@ from ..delivery import cash
 from ..delivery.documents import REQUIRED as REQUIRED_DOCUMENTS
 from ..delivery.documents import as_view as documents_view
 from ..delivery.documents import check_type
+from ..payouts import accounts as payout_accounts
 from ..payouts import ledger
 from . import audit
 
@@ -231,6 +232,8 @@ async def get_rider(rider_id: str) -> dict:
         "rating": float(row["rating"]),
         "ratingCount": row["rating_count"],
         "joinedAt": row["created_at"].isoformat(),
+        # Bank or UPI details, in full: Foodos sends the money. Null until added.
+        "payoutAccount": payout_accounts.admin_view(await payout_accounts.rider_account_row(identifier)),
         "lastSignedInAt": row["last_login_at"].isoformat() if row["last_login_at"] else None,
         "location": {
             "latitude": float(row["current_latitude"]),
@@ -474,5 +477,22 @@ async def record_cash_deposit(
             ip,
             connection,
         )
+
+    return await get_rider(str(identifier))
+
+
+async def save_payout_account(rider_id: str, body: Any, actor_id: uuid.UUID, ip: Optional[str]) -> dict:
+    """Staff enter or correct the rider's bank details; they go back to pending."""
+    identifier = as_uuid(rider_id)
+    await payout_accounts.admin_save_rider(identifier, body, actor_id, ip)
+
+    return await get_rider(str(identifier))
+
+
+async def verify_payout_account(
+    rider_id: str, approve: bool, reason: Optional[str], actor_id: uuid.UUID, ip: Optional[str]
+) -> dict:
+    identifier = as_uuid(rider_id)
+    await payout_accounts.verify_rider(identifier, approve, reason, actor_id, ip)
 
     return await get_rider(str(identifier))

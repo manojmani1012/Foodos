@@ -16,7 +16,9 @@ from ..components.delivery.schemas import (
     StepBody,
 )
 from ..components.media.service import MAX_IMAGE_BYTES
+from ..components.payouts import accounts as payout_accounts
 from ..components.payouts import party as payouts
+from ..components.payouts import tds
 
 router = APIRouter(prefix="/api/v1/delivery", tags=["delivery"])
 
@@ -126,6 +128,21 @@ async def delivered(delivery_id: str, body: Optional[StepBody] = None, user: Cur
 @router.get("/earnings")
 async def earnings(days: int = Query(default=7, ge=1, le=90), user: CurrentUser = Depends(rider_only)):
     return {"ok": True, **await service.earnings(user.id, days)}
+
+
+@router.get("/tds")
+async def my_tds(fy: Optional[int] = Query(default=None, ge=2000, le=2100), user: CurrentUser = Depends(rider_only)):
+    return {"ok": True, **await tds.rider_year(user.id, fy)}
+
+
+@router.get("/payout-account")
+async def get_payout_account(user: CurrentUser = Depends(rider_only)):
+    return {"ok": True, **await payout_accounts.get_for_rider(user.id)}
+
+
+@router.put("/payout-account")
+async def save_payout_account(body: payout_accounts.PayoutAccountBody, user: CurrentUser = Depends(rider_only)):
+    return {"ok": True, **await payout_accounts.save_for_rider(user.id, body)}
 
 
 @router.get("/history")

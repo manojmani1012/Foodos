@@ -847,15 +847,22 @@ async def earnings(user_id: uuid.UUID, days: int) -> dict:
                  as distance,
                coalesce(sum(x.incentive_paise), 0)::int as incentive,
                coalesce(sum(x.tip_paise), 0)::int as tips,
+               -- TDS as recorded in the ledger; a trip not written there yet is
+               -- worked out at today's rate. Never on tips.
+               coalesce(sum(case when e.id is not null then coalesce((e.breakdown->>'tdsPaise')::bigint, 0)
+                                 else round((x.base_earning_paise + x.incentive_paise) * $3::numeric / 100) end), 0)::int
+                 as tds,
                coalesce(sum(x.total_distance_km), 0)::float as km
         from days d
         left join deliveries x
           on x.partner_id = $1 and x.status = 'delivered' and x.delivered_at::date = d.day
+        left join earnings_entries e on e.source = 'order:' || x.order_id || ':rider'
         group by d.day
         order by d.day
         """,
         user_id,
         days,
+        payment_settings.current()["riderTdsPct"],
     )
 
     cash_today = await fetchval(
@@ -876,7 +883,9 @@ async def earnings(user_id: uuid.UUID, days: int) -> dict:
             "distancePaise": row["distance"],
             "incentivePaise": row["incentive"],
             "tipsPaise": row["tips"],
+            # Before TDS, which is shown on its own.
             "earningsPaise": row["base"] + row["distance"] + row["incentive"] + row["tips"],
+            "tdsPaise": row["tds"],
             "distanceKm": round(row["km"], 1),
         }
         for row in rows
@@ -894,6 +903,7 @@ async def earnings(user_id: uuid.UUID, days: int) -> dict:
             "incentivePaise": total("incentivePaise"),
             "tipsPaise": total("tipsPaise"),
             "earningsPaise": total("earningsPaise"),
+            "tdsPaise": total("tdsPaise"),
             "distanceKm": round(total("distanceKm"), 1),
         },
         "daily": daily,

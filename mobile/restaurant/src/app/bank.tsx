@@ -19,7 +19,6 @@ import { ScreenHeader } from '@/components/ScreenHeader'
 import {
   ACCOUNT_NUMBER_PATTERN,
   IFSC_PATTERN,
-  UPI_PATTERN,
   fetchPayoutAccount,
   payoutAccountStatusLabel,
   savePayoutAccount,
@@ -42,7 +41,6 @@ export default function BankScreen() {
   const [confirmNumber, setConfirmNumber] = useState('')
   const [ifsc, setIfsc] = useState('')
   const [bankName, setBankName] = useState('')
-  const [upiId, setUpiId] = useState('')
 
   useEffect(() => {
     fetchPayoutAccount()
@@ -51,7 +49,6 @@ export default function BankScreen() {
         setHolder(loaded?.holder ?? '')
         setIfsc(loaded?.ifsc ?? '')
         setBankName(loaded?.bankName ?? '')
-        setUpiId(loaded?.upiId ?? '')
       })
       .catch(loadError => setError(loadError.message || 'Could not load your bank details'))
       .finally(() => setLoading(false))
@@ -62,10 +59,8 @@ export default function BankScreen() {
   const number = accountNumber.replace(/\s/g, '')
   const confirm = confirmNumber.replace(/\s/g, '')
   const code = ifsc.trim().toUpperCase()
-  const upi = upiId.trim()
   const name = holder.trim()
 
-  const anyBankField = !!(name || number || code)
   const bankComplete = !!name && !!code && (!!number || hasSavedNumber)
 
   const problems: string[] = []
@@ -73,11 +68,7 @@ export default function BankScreen() {
   if (number && !ACCOUNT_NUMBER_PATTERN.test(number)) problems.push('Account number must be 9 to 18 digits.')
   if (number && number !== confirm) problems.push('The two account numbers do not match.')
   if (code && !IFSC_PATTERN.test(code)) problems.push('IFSC looks wrong. It is 11 characters, like HDFC0001234.')
-  if (upi && !UPI_PATTERN.test(upi)) problems.push('UPI id looks wrong. It looks like name@okhdfcbank.')
-  if (anyBankField && !bankComplete) {
-    problems.push('For a bank account, fill in the holder name, account number and IFSC.')
-  }
-  if (!bankComplete && !upi) problems.push('Add a bank account or a UPI id.')
+  if (!bankComplete) problems.push('Fill in the account holder name, account number and IFSC.')
 
   const valid = problems.length === 0
 
@@ -85,18 +76,12 @@ export default function BankScreen() {
     if (!valid || saving) return
 
     const changes: PayoutAccountChanges = {
-      holder: name || null,
-      ifsc: code || null,
+      holder: name,
+      ifsc: code,
       bankName: bankName.trim() || null,
-      upiId: upi || null,
     }
 
-    if (number) {
-      changes.accountNumber = number
-    } else if (!anyBankField && hasSavedNumber) {
-      // Bank fields cleared: UPI only from now on.
-      changes.accountNumber = null
-    }
+    if (number) changes.accountNumber = number
 
     setSaving(true)
     setError('')
@@ -183,13 +168,11 @@ export default function BankScreen() {
                     {account.bankName ? ` · ${account.bankName}` : ''}
                   </Text>
                 ) : null}
-                {account.upiId ? <Text style={styles.statusText}>UPI {account.upiId}</Text> : null}
               </View>
             </View>
           ) : (
             <Text style={styles.intro}>
-              Foodos sends your earnings to this account on each payout day. Add a bank account, a UPI id,
-              or both.
+              Foodos pays restaurants by bank transfer (NEFT or RTGS) to a verified account.
             </Text>
           )}
 
@@ -255,20 +238,7 @@ export default function BankScreen() {
             onChangeText={setBankName}
           />
 
-          <Text style={styles.label}>UPI (optional)</Text>
-          <TextInput
-            style={[styles.input, upi && !UPI_PATTERN.test(upi) && styles.inputInvalid]}
-            placeholder="name@okhdfcbank"
-            placeholderTextColor={colors.muted}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="email-address"
-            maxLength={100}
-            value={upiId}
-            onChangeText={setUpiId}
-          />
-
-          {problems.length > 0 && (anyBankField || upi) ? (
+          {problems.length > 0 && (name || number || code) ? (
             <View style={styles.problems}>
               {problems.map(problem => (
                 <Text key={problem} style={styles.problemText}>
@@ -278,7 +248,7 @@ export default function BankScreen() {
             </View>
           ) : (
             <Text style={styles.hint}>
-              Foodos checks these details before sending money. Payouts are sent by Foodos on the payout day
+              Foodos pays restaurants by bank transfer (NEFT or RTGS) to a verified account. Payouts are sent by Foodos on the payout day
               and marked paid with the bank reference (UTR).
             </Text>
           )}

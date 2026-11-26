@@ -1,5 +1,5 @@
 import { Feather } from '@expo/vector-icons'
-import { useFocusEffect } from 'expo-router'
+import { useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useState } from 'react'
 import {
   ActivityIndicator,
@@ -19,7 +19,15 @@ import { DocumentsCard } from '@/components/DocumentsCard'
 import { SupportCard } from '@/components/SupportCard'
 import { useAuth } from '@/lib/AuthContext'
 import { API_BASE_URL } from '@/lib/apiClient'
-import { fetchPartner, updatePartner, type Partner, type VehicleType } from '@/lib/delivery'
+import {
+  fetchPartner,
+  fetchPayoutAccount,
+  payoutAccountStatusLabel,
+  updatePartner,
+  type Partner,
+  type PayoutAccount,
+  type VehicleType,
+} from '@/lib/delivery'
 import { colors, radius, shadow, space, type } from '@/theme'
 
 const VEHICLES: { key: VehicleType; label: string; icon: keyof typeof Feather.glyphMap }[] = [
@@ -38,6 +46,9 @@ const STATUS_TEXT: Record<Partner['status'], { label: string; tone: string; soft
 
 export default function ProfileScreen() {
   const { signOut } = useAuth()
+  const router = useRouter()
+  const [account, setAccount] = useState<PayoutAccount | null>(null)
+  const [accountLoaded, setAccountLoaded] = useState(false)
 
   const [partner, setPartner] = useState<Partner | null>(null)
   const [loading, setLoading] = useState(true)
@@ -70,6 +81,12 @@ export default function ProfileScreen() {
   useFocusEffect(
     useCallback(() => {
       load()
+      fetchPayoutAccount()
+        .then(loaded => {
+          setAccount(loaded)
+          setAccountLoaded(true)
+        })
+        .catch(() => setAccountLoaded(false))
     }, [load]),
   )
 
@@ -208,6 +225,17 @@ export default function ProfileScreen() {
             {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save changes</Text>}
           </Pressable>
 
+          <Pressable style={styles.bankRow} onPress={() => router.push('/bank')}>
+            <Feather name="credit-card" size={18} color={colors.brand} />
+            <View style={styles.flex}>
+              <Text style={styles.bankRowTitle}>Bank account for payouts</Text>
+              <Text style={styles.bankRowHint}>
+                {accountLoaded ? payoutAccountStatusLabel(account) : 'Where Foodos sends your earnings'}
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={18} color={colors.faint} />
+          </Pressable>
+
           <DocumentsCard />
 
           <SupportCard />
@@ -228,6 +256,19 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
+  bankRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    marginTop: space.xl,
+    padding: space.lg,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+  },
+  bankRowTitle: { ...type.bodyStrong, color: colors.ink },
+  bankRowHint: { ...type.caption, color: colors.muted, marginTop: 1 },
   screen: { flex: 1, backgroundColor: colors.ground },
   flex: { flex: 1 },
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center' },

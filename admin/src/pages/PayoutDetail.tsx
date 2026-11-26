@@ -17,7 +17,7 @@ import {
 import { useToast } from '../lib/toast'
 import type { LedgerEntry, Payout, PayoutRow } from '../lib/types'
 import { useLoad } from '../lib/useLoad'
-import { DueBadge, partyLink } from './Payouts'
+import { BLOCKER_LABEL, BlockerBadge, DueBadge, partyLink } from './Payouts'
 
 type Action = 'paid' | 'failed' | 'hold' | 'release' | 'reschedule' | 'retry' | 'cancel'
 
@@ -34,6 +34,9 @@ const BREAKDOWN_LABEL: Record<string, string> = {
   foodPaise: 'food',
   packagingPaise: 'packaging',
   commissionPaise: 'commission',
+  gatewayFeePaise: 'payment gateway fee',
+  discountPaise: 'restaurant coupon discount',
+  bankOfferPaise: 'bank offer (paid by the bank, not deducted)',
   gstOnCommissionPaise: 'GST on commission',
   tdsPaise: 'TDS',
   basePaise: 'base',
@@ -44,7 +47,7 @@ const BREAKDOWN_LABEL: Record<string, string> = {
 }
 
 // Deductions shown with a minus sign.
-const DEDUCTIONS = new Set(['commissionPaise', 'gstOnCommissionPaise', 'tdsPaise'])
+const DEDUCTIONS = new Set(['commissionPaise', 'gatewayFeePaise', 'discountPaise', 'gstOnCommissionPaise', 'tdsPaise'])
 
 function breakdownText(entry: LedgerEntry) {
   const breakdown = entry.breakdown || {}
@@ -284,6 +287,8 @@ export default function PayoutDetail() {
                 <button
                   key={kind}
                   className={kind === 'paid' ? 'btn btn-primary' : kind === 'cancel' || kind === 'failed' ? 'btn btn-danger' : 'btn'}
+                  disabled={kind === 'paid' && !!payout.blocker}
+                  title={kind === 'paid' && payout.blocker ? BLOCKER_LABEL[payout.blocker] : undefined}
                   onClick={() => setAction(kind)}
                 >
                   {LABEL[kind]}
@@ -291,6 +296,15 @@ export default function PayoutDetail() {
               ))}
             />
 
+            {payout.blocker && ['scheduled', 'on_hold', 'failed', 'processing'].includes(payout.status) && (
+              <div className="notice notice-warning">
+                <BlockerBadge blocker={payout.blocker} /> Mark paid is switched off until the bank details are added and
+                verified.{' '}
+                <Link to={`${partyLink(payout.partyType, payout.partyId)}`}>
+                  Open the {payout.partyType === 'restaurant' ? 'restaurant' : 'rider'} page
+                </Link>
+              </div>
+            )}
             {payout.status === 'on_hold' && payout.holdReason && (
               <div className="notice notice-warning">On hold: {payout.holdReason}</div>
             )}
@@ -321,7 +335,7 @@ export default function PayoutDetail() {
                     rows={[
                       ['Earnings', formatMoney(payout.grossPaise)],
                       ...(payout.commissionPaise
-                        ? ([['Commission and tax', `−${formatMoney(payout.commissionPaise)}`]] as [ReactNode, ReactNode][])
+                        ? ([['Commission, gateway fee and tax', `−${formatMoney(payout.commissionPaise)}`]] as [ReactNode, ReactNode][])
                         : []),
                       ['Adjustments, refunds and cash', formatSigned(payout.adjustmentsPaise)],
                       [<strong key="n">To pay</strong>, <strong key="v">{formatSigned(payout.netPaise)}</strong>],
@@ -335,12 +349,10 @@ export default function PayoutDetail() {
                       {bank
                         ? 'These bank details have not been verified yet. Check them before sending money.'
                         : 'No bank details on file. Ask the partner to add them in their app.'}
-                      {payout.partyType === 'restaurant' && (
-                        <>
-                          {' '}
-                          <Link to={`/restaurants/${payout.partyId}`}>Verify on the restaurant page</Link>
-                        </>
-                      )}
+                      {' '}
+                      <Link to={partyLink(payout.partyType, payout.partyId)}>
+                        Add or verify on the {payout.partyType === 'restaurant' ? 'restaurant' : 'rider'} page
+                      </Link>
                     </div>
                   )}
                   <Details
@@ -366,7 +378,9 @@ export default function PayoutDetail() {
                             ['Account number', <Copyable key="a" value={bank.accountNumber} />],
                             ['IFSC', <Copyable key="i" value={bank.ifsc} />],
                             ['Bank', bank.bankName],
-                            ['UPI ID', <Copyable key="u" value={bank.upiId} />],
+                            ...(payout.partyType === 'delivery_partner'
+                              ? ([['UPI ID', <Copyable key="u" value={bank.upiId} />]] as [ReactNode, ReactNode][])
+                              : []),
                           ] as [ReactNode, ReactNode][])
                         : ([['Bank', payout.bank?.summary || 'Not added']] as [ReactNode, ReactNode][])),
                     ]}

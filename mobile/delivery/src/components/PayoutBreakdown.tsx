@@ -10,6 +10,7 @@ export function PayoutBreakdown({ breakdown }: { breakdown: Breakdown }) {
     { label: 'Base pay', paise: breakdown.basePaise ?? 0, sign: '+' },
     { label: 'Distance pay', paise: breakdown.distancePaise ?? 0, sign: '+' },
     { label: 'Incentives', paise: breakdown.incentivePaise ?? 0, sign: '+' },
+    { label: 'TDS deducted', paise: breakdown.tdsPaise ?? 0, sign: '-' },
     { label: 'Tips from customers', paise: breakdown.tipsPaise ?? 0, sign: '+' },
     { label: 'Cash collected from customers', paise: breakdown.cashCollectedPaise ?? 0, sign: '-' },
     { label: 'Cash handed over to Foodos', paise: breakdown.cashDepositedPaise ?? 0, sign: '+' },

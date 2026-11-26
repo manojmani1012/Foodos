@@ -31,7 +31,7 @@ import {
   plural,
 } from '../lib/format'
 import { useToast } from '../lib/toast'
-import type { FinanceOverview, PartyType, PayoutRow, RestaurantRow, RiderRow, Unpaid, UnpaidParty } from '../lib/types'
+import type { FinanceOverview, PartyType, PayoutBatch, PayoutBlocker, PayoutRow, RestaurantRow, RiderRow, Unpaid, UnpaidParty } from '../lib/types'
 import { useLoad } from '../lib/useLoad'
 import { useFilters } from '../lib/useParams'
 
@@ -56,8 +56,21 @@ const REPORTS = [
   { kind: 'collections', label: 'Collections', hint: 'Every delivered order: how the customer paid, and refunds.' },
   { kind: 'payouts', label: 'Payouts', hint: 'Payouts with their status, pay date and bank reference.' },
   { kind: 'ledger', label: 'Ledger', hint: 'Every earning, refund, cash and adjustment line per partner.' },
-  { kind: 'commission', label: 'Commission', hint: 'Foodos commission and GST on it, per restaurant.' },
+  { kind: 'commission', label: 'Commission', hint: 'Foodos commission, gateway fee and GST on them, per restaurant.' },
+  { kind: 'tds', label: 'Rider TDS', hint: 'Per rider: deliveries, earnings (without tips) and TDS deducted. Use a financial-year date range for the annual summary.' },
 ]
+
+export const BLOCKER_LABEL: Record<PayoutBlocker, string> = {
+  bank_missing: 'Bank details missing',
+  bank_pending: 'Bank details waiting for verification',
+  bank_rejected: 'Bank details rejected',
+}
+
+// Why a payout cannot be marked paid yet: the partner's bank details.
+export function BlockerBadge({ blocker }: { blocker?: PayoutBlocker | null }) {
+  if (!blocker) return null
+  return <Badge tone={blocker === 'bank_rejected' ? 'danger' : 'warning'}>{BLOCKER_LABEL[blocker]}</Badge>
+}
 
 export function partyLink(partyType: PartyType, partyId: string) {
   return partyType === 'restaurant' ? `/restaurants/${partyId}` : `/riders/${partyId}`
@@ -90,9 +103,10 @@ function Overview({ data }: { data: FinanceOverview }) {
       </div>
 
       <h3 className="subhead">Foodos revenue</h3>
-      <div className="stats stats-3">
+      <div className="stats">
         <Stat label="Commission" value={formatMoney(commission.commissionPaise, { whole: true })} />
-        <Stat label="GST on commission" value={formatMoney(commission.gstOnCommissionPaise, { whole: true })} />
+        <Stat label="Payment gateway fee" value={formatMoney(commission.gatewayFeePaise ?? 0, { whole: true })} />
+        <Stat label="GST on commission and fee" value={formatMoney(commission.gstOnCommissionPaise, { whole: true })} />
         <Stat label="Delivery fees" value={formatMoney(commission.deliveryFeesPaise, { whole: true })} />
       </div>
 
@@ -132,6 +146,14 @@ function Overview({ data }: { data: FinanceOverview }) {
           tone={payouts.failed.count > 0 ? 'danger' : undefined}
           to="/payouts?status=failed"
         />
+        {payouts.blocked && (
+          <Stat
+            label="Blocked by bank details"
+            value={payouts.blocked.count}
+            hint={`${plural(payouts.blocked.count, 'payout')}, ${formatMoney(payouts.blocked.netPaise, { whole: true })}`}
+            tone={payouts.blocked.count > 0 ? 'warning' : undefined}
+          />
+        )}
       </div>
       <p className="muted small">
         Paid in this period: {plural(payouts.paid.count, 'payout')}, {formatMoney(payouts.paid.netPaise)}.
@@ -154,6 +176,128 @@ function Overview({ data }: { data: FinanceOverview }) {
         </>
       )}
     </div>
+  )
+}
+
+function BatchCard({ batch, onChanged }: { batch: PayoutBatch; onChanged: () => void }) {
+  const toast = useToast()
+  const [dialog, setDialog] = useState<'hold' | 'release' | 'reschedule' | null>(null)
+  const [date, setDate] = useState(batch.payDate > indiaToday() ? batch.payDate : indiaToday())
+  const c = batch.counts
+  const statuses: [string, number][] = [
+    ['scheduled', c.scheduled],
+    ['on hold', c.on_hold],
+    ['processing', c.processing],
+    ['failed', c.failed],
+    ['paid', c.paid],
+    ['cancelled', c.cancelled],
+  ]
+
+  async function run(action: 'hold' | 'release' | 'reschedule', body?: object) {
+    const result = await api<{ changed: number }>(`/api/v1/admin/finance/batches/${batch.id}/${action}`, { method: 'POST', body })
+    toast(`${plural(result.changed, 'payout')} changed`)
+    onChanged()
+  }
+
+  return (
+    <div className="schedule-group">
+      <div className="row-between">
+        <strong>Pay date {formatPayDay(batch.payDate)}</strong>
+        <span className="strong">{formatMoney(batch.netPaise)}</span>
+      </div>
+      <p className="muted small">
+        Earnings {formatDay(batch.periodStart)} – {formatDay(batch.periodEnd)} · {plural(batch.payoutCount, 'payout')}
+      </p>
+      <p className="small">
+        {statuses
+          .filter(([, count]) => count > 0)
+          .map(([label, count]) => `${count} ${label}`)
+          .join(' · ') || 'No payouts'}
+      </p>
+      {batch.holdReason && <div className="notice notice-warning">Held: {batch.holdReason}</div>}
+      {batch.blockedCount > 0 && (
+        <div className="notice notice-warning">
+          {plural(batch.blockedCount, 'payout')} cannot be marked paid until bank details are added or verified.
+        </div>
+      )}
+      <div className="row-gap">
+        <button className="btn btn-small" disabled={c.scheduled === 0} onClick={() => setDialog('hold')}>
+          Hold all
+        </button>
+        <button className="btn btn-small" disabled={c.on_hold === 0} onClick={() => setDialog('release')}>
+          Release all
+        </button>
+        <button className="btn btn-small" disabled={c.scheduled + c.on_hold === 0} onClick={() => setDialog('reschedule')}>
+          Reschedule all
+        </button>
+      </div>
+
+      {dialog === 'hold' && (
+        <ConfirmDialog
+          title="Hold every scheduled payout in this batch?"
+          body={<p>{plural(c.scheduled, 'payout')} will not be paid until released. Each partner is told it is on hold, with the reason.</p>}
+          confirmLabel="Hold all"
+          reasonLabel="Reason"
+          reasonHint="Partners see this in their app."
+          onConfirm={(reason) => run('hold', { reason })}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog === 'release' && (
+        <ConfirmDialog
+          title="Release every held payout in this batch?"
+          body={<p>{plural(c.on_hold, 'payout')} go back to scheduled.</p>}
+          confirmLabel="Release all"
+          onConfirm={() => run('release')}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog === 'reschedule' && (
+        <ConfirmDialog
+          title="Reschedule this batch?"
+          body={
+            <>
+              <p>Every scheduled or held payout moves to the new pay date. Partners are told the new date.</p>
+              <Field label="New pay date">
+                {(id) => <input id={id} className="input" type="date" min={indiaToday()} value={date} onChange={(e) => setDate(e.target.value)} />}
+              </Field>
+            </>
+          }
+          confirmLabel="Reschedule all"
+          onConfirm={async () => {
+            if (!date || date < indiaToday()) throw new Error('Pick today or a later date')
+            await run('reschedule', { date })
+          }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function Batches({ refreshKey, onChanged }: { refreshKey: number; onChanged: () => void }) {
+  const state = useLoad(() => api<{ batches: PayoutBatch[] }>('/api/v1/admin/finance/batches'), `batches:${refreshKey}`)
+
+  return (
+    <Card title="Batches">
+      <p className="muted small">
+        A batch is every payout that shares a pay date. Hold, release or move the whole batch at once. Nothing is sent
+        automatically: staff send each payout from the bank and mark it paid.
+      </p>
+      <Loadable state={state}>
+        {(data) =>
+          data.batches.length === 0 ? (
+            <p className="muted">No open batches.</p>
+          ) : (
+            <div className="stack">
+              {data.batches.map((batch) => (
+                <BatchCard key={batch.id} batch={batch} onChanged={() => { state.reload(); onChanged() }} />
+              ))}
+            </div>
+          )
+        }
+      </Loadable>
+    </Card>
   )
 }
 
@@ -204,8 +348,12 @@ function PayoutsTable({ payouts }: { payouts: PayoutRow[] }) {
               </td>
               <td data-label="Status">
                 <StatusBadge map={PAYOUT_STATUS} value={payout.status} />{' '}
-                {!payout.bank?.verified && payout.status !== 'paid' && payout.status !== 'cancelled' && (
-                  <Badge tone="warning">{payout.bank?.summary ? 'Bank not verified' : 'No bank details'}</Badge>
+                {payout.status !== 'paid' && payout.status !== 'cancelled' && (
+                  payout.blocker !== undefined ? (
+                    <BlockerBadge blocker={payout.blocker} />
+                  ) : (
+                    !payout.bank?.verified && <Badge tone="warning">{payout.bank?.summary ? 'Bank not verified' : 'No bank details'}</Badge>
+                  )
                 )}
                 {payout.holdReason && payout.status === 'on_hold' && <div className="sub">{payout.holdReason}</div>}
                 {payout.failureReason && payout.status === 'failed' && <div className="sub">{payout.failureReason}</div>}
@@ -646,6 +794,8 @@ export default function Payouts() {
       <Card title={`${formatDay(filters.from)} to ${formatDay(filters.to)}`}>
         <Loadable state={overview}>{(data) => <Overview data={data} />}</Loadable>
       </Card>
+
+      <Batches refreshKey={refreshKey} onChanged={() => { overview.reload(); list.reload() }} />
 
       <h2 className="section-title">Payouts</h2>
 

@@ -46,6 +46,7 @@ type Form = {
   maxDiscount: string
   minOrder: string
   firstOrderOnly: boolean
+  fundedBy: 'restaurant' | 'bank'
   restaurantId: string
   usageLimit: string
   perUserLimit: string
@@ -63,6 +64,7 @@ function toForm(offer: Offer | null): Form {
     maxDiscount: offer?.maxDiscountPaise ? String(offer.maxDiscountPaise / 100) : '',
     minOrder: offer?.minOrderPaise ? String(offer.minOrderPaise / 100) : '',
     firstOrderOnly: offer?.firstOrderOnly || false,
+    fundedBy: offer?.fundedBy || 'restaurant',
     restaurantId: offer?.restaurant?.id || '',
     usageLimit: offer?.usageLimit ? String(offer.usageLimit) : '',
     perUserLimit: String(offer?.perUserLimit ?? 1),
@@ -106,6 +108,7 @@ function OfferDialog({
       maxDiscountPaise: form.type === 'percent' ? rupeesToPaise(form.maxDiscount) : null,
       minOrderPaise: rupeesToPaise(form.minOrder) ?? 0,
       firstOrderOnly: form.firstOrderOnly,
+      fundedBy: form.fundedBy,
       restaurantId: form.restaurantId || null,
       usageLimit: form.usageLimit ? Number(form.usageLimit) : null,
       perUserLimit: Number(form.perUserLimit) || 1,
@@ -209,6 +212,18 @@ function OfferDialog({
               </select>
             )}
           </Field>
+          <Field
+            label="Paid by"
+            hint="Foodos does not fund coupons. A restaurant coupon comes off that restaurant's payout; a bank or card offer is paid by the bank and recorded separately."
+            error={fields.fundedBy}
+          >
+            {(id) => (
+              <select id={id} className="input" value={form.fundedBy} onChange={(e) => set('fundedBy', e.target.value as Form['fundedBy'])}>
+                <option value="restaurant">Restaurant</option>
+                <option value="bank">Bank or card</option>
+              </select>
+            )}
+          </Field>
           <label className="checkbox">
             <input type="checkbox" checked={form.firstOrderOnly} onChange={(e) => set('firstOrderOnly', e.target.checked)} />
             Only on a customer's first order
@@ -227,7 +242,7 @@ function OfferDialog({
           </Field>
         </div>
 
-        <p className="muted small">The discount comes out of Foodos's share; the restaurant is paid in full for the food.</p>
+        <p className="muted small">Foodos never pays for a coupon. If the restaurant pays, the discount is taken off its payout; if a bank or card pays, the restaurant is not charged.</p>
 
         {error && <ErrorBox error={error} />}
       </form>
@@ -281,6 +296,7 @@ export default function Offers() {
                       <th>Offer</th>
                       <th>Discount</th>
                       <th>Where</th>
+                      <th>Paid by</th>
                       <th>Runs</th>
                       <th className="num">Used</th>
                       <th>Status</th>
@@ -299,6 +315,7 @@ export default function Offers() {
                           {offer.firstOrderOnly && <div className="sub">First order only</div>}
                         </td>
                         <td>{offer.restaurant ? offer.restaurant.name : 'All restaurants'}</td>
+                        <td>{offer.fundedBy === 'bank' ? 'Bank or card' : 'Restaurant'}</td>
                         <td>
                           {formatDate(offer.validFrom)}
                           <div className="sub">{offer.validUntil ? `to ${formatDate(offer.validUntil)}` : 'No end date'}</div>

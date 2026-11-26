@@ -45,9 +45,16 @@ export function PayoutBreakdown({
     <View>
       <Line label="Food sales" value={formatRupees(b.foodPaise ?? 0)} />
       <Line label="Packaging charges" value={formatRupees(b.packagingPaise ?? 0)} />
-      <Line label="Foodos commission" value={`− ${formatRupees(Math.abs(b.commissionPaise ?? 0))}`} />
+      {b.discountPaise ? (
+        <Line label="Coupons paid by you" value={`− ${formatRupees(Math.abs(b.discountPaise))}`} />
+      ) : null}
+      <Line
+        label="Foodos commission (on food + packaging)"
+        value={`− ${formatRupees(Math.abs(b.commissionPaise ?? 0))}`}
+      />
+      <Line label="Payment gateway fee" value={`− ${formatRupees(Math.abs(b.gatewayFeePaise ?? 0))}`} />
       {b.gstOnCommissionPaise ? (
-        <Line label="GST on commission" value={`− ${formatRupees(Math.abs(b.gstOnCommissionPaise))}`} />
+        <Line label="GST on these fees" value={`− ${formatRupees(Math.abs(b.gstOnCommissionPaise))}`} />
       ) : null}
       {b.tdsPaise ? <Line label="TDS (income tax)" value={`− ${formatRupees(Math.abs(b.tdsPaise))}`} /> : null}
       {refunds ? <Line label="Refunds charged to you" value={`− ${formatRupees(refunds)}`} /> : null}
@@ -59,6 +66,11 @@ export function PayoutBreakdown({
       ) : null}
       <View style={styles.divider} />
       <Line label={totalLabel} value={formatRupees(totalPaise)} strong />
+      {b.bankOfferPaise ? (
+        <Text style={styles.note}>
+          Bank or card offers ({formatRupees(Math.abs(b.bankOfferPaise))}) are paid by the bank, not by you.
+        </Text>
+      ) : null}
     </View>
   )
 }
@@ -85,5 +97,6 @@ const styles = StyleSheet.create({
   pillBadText: { color: colors.danger },
   pillNeutral: { backgroundColor: colors.warningSoft },
   pillNeutralText: { color: colors.warning },
+  note: { ...type.caption, color: colors.muted, marginTop: space.sm, lineHeight: 16 },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.line, marginVertical: space.sm },
 })

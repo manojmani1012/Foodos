@@ -350,8 +350,13 @@ export default function OrderDetail() {
                       ['Status', paymentStatusLabel(order.paymentMethod, order.paymentStatus)],
                       [
                         `Commission (${order.commissionPct}%)`,
-                        `${formatMoney(order.commissionPaise)} on ${formatMoney(order.subtotalPaise)} of food`,
+                        typeof order.gatewayFeePaise === 'number'
+                          ? formatMoney(order.commissionPaise)
+                          : `${formatMoney(order.commissionPaise)} on ${formatMoney(order.subtotalPaise)} of food`,
                       ],
+                      ...(typeof order.gatewayFeePaise === 'number'
+                        ? ([['Payment gateway fee', formatMoney(order.gatewayFeePaise)]] as [string, string][])
+                        : []),
                     ]}
                   />
                   {order.payments.length > 0 && (

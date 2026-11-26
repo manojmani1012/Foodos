@@ -15,6 +15,7 @@ from ...errors import conflict, not_found
 from ..notifications import events
 from ..orders import service as orders_service
 from ..payments import refunds
+from ..payouts import settings as payment_settings
 from . import audit
 
 LIVE = ("pending", "confirmed", "preparing", "ready", "picked_up", "on_the_way")
@@ -183,7 +184,8 @@ async def get_order(order_id: str) -> dict:
 
     row = await fetchrow(
         """
-        select o.id, o.status, o.payment_method, o.payment_status, o.cancelled_by, o.subtotal_paise, o.is_test,
+        select o.id, o.status, o.payment_method, o.payment_status, o.cancelled_by, o.subtotal_paise, o.packaging_fee_paise, o.discount_paise,
+               o.discount_funded_by, o.is_test,
                o.confirmed_at, o.ready_at, o.picked_up_at,
                u.id as customer_id, u.full_name as customer_name, u.phone as customer_phone,
                u.status as customer_status,
@@ -237,9 +239,16 @@ async def get_order(order_id: str) -> dict:
     latest_refund = refund_rows[-1]["status"] if refund_rows else None
     captured = any(p["provider"] == "razorpay" and p["status"] == "captured" for p in payments)
 
-    # The restaurant's commission is worked out at today's rate, the same way
-    # the restaurant app shows it.
-    commission = round(row["subtotal_paise"] * float(row["commission_pct"]) / 100)
+    # The restaurant's share is worked out at today's rates, the same way the
+    # restaurant app and the payout ledger do.
+    share = payment_settings.restaurant_share(
+        row["subtotal_paise"],
+        row["packaging_fee_paise"],
+        float(row["commission_pct"]),
+        row["discount_paise"],
+        row["discount_funded_by"],
+        row["payment_method"],
+    )
 
     return {
         **view,
@@ -269,7 +278,13 @@ async def get_order(order_id: str) -> dict:
         # The view above hides it once the order is over.
         "deliveryCode": row["delivery_code"] if row["status"] in LIVE else None,
         "isTest": row["is_test"],
-        "commissionPaise": commission,
+        "commissionPaise": share["commissionPaise"],
+        "gatewayFeePaise": share["gatewayFeePaise"],
+        "gstOnCommissionPaise": share["gstOnCommissionPaise"],
+        "discountFundedBy": row["discount_funded_by"],
+        "restaurantDiscountPaise": share["discountPaise"],
+        "bankOfferPaise": share["bankOfferPaise"],
+        "restaurantEarningsPaise": share["amountPaise"],
         "commissionPct": float(row["commission_pct"]),
         "payments": [
             {

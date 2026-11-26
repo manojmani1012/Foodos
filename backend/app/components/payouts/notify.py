@@ -101,6 +101,14 @@ async def failed(payout_id: uuid.UUID) -> None:
     )
 
 
+async def rescheduled(payout_id: uuid.UUID) -> None:
+    await _send(
+        payout_id,
+        "Payout date changed",
+        lambda p: f"Your payout of {rupees(p['net_paise'])} is now due on {short_date(p['scheduled_for'])}",
+    )
+
+
 async def held(payout_id: uuid.UUID) -> None:
     await _send(
         payout_id,

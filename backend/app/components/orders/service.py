@@ -368,10 +368,13 @@ async def place_order(
                discount_paise, total_paise, offer_id, payment_method, payment_status,
                special_instructions, estimated_delivery_at, confirmed_at, idempotency_key,
                round_off_paise, delivery_code, is_test,
-               cooking_instructions, no_cutlery, delivery_preferences)
+               cooking_instructions, no_cutlery, delivery_preferences, discount_funded_by)
             values ($1, $2, $3::jsonb, $16, $4, $5, $6, $7, $8, $9, $10, $11,
                     $12, $23, $13, $14, $17, $15, $18, $19,
-                    (select is_test from users where id = $1), $20, $21, $22::text[])
+                    (select is_test from users where id = $1), $20, $21, $22::text[],
+                    -- Who pays for the coupon, copied so editing the offer later
+                    -- never changes an old order.
+                    coalesce((select funded_by from offers where id = $11::uuid), 'restaurant'))
             returning id
             """,
             user_id,

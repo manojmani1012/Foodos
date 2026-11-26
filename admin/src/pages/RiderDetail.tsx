@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import MapPicker from '../components/Map'
+import { PayoutAccountCard } from '../components/PayoutAccountCard'
 import { RiderDocuments } from '../components/RiderDocuments'
 import { TestAccountCard, TestBadge } from '../components/TestAccount'
 import { Badge, Card, ConfirmDialog, Details, ErrorBox, Field, Loadable, Modal, PageHeader, Stat, StatusBadge } from '../components/ui'
@@ -285,7 +286,11 @@ export default function RiderDetail() {
 
             <div className="stats">
               <Stat label="Deliveries" value={rider.stats.deliveries} hint={`${rider.stats.deliveriesLast7Days} in the last 7 days`} />
-              <Stat label="Earned, last 7 days" value={formatMoney(rider.stats.earnedPaiseLast7Days, { whole: true })} hint={`${rider.stats.distanceKmLast7Days} km`} />
+              <Stat
+                label="Earned, last 7 days"
+                value={formatMoney(rider.stats.earnedPaiseLast7Days, { whole: true })}
+                hint={`${rider.stats.distanceKmLast7Days} km${rider.stats.tdsPaiseLast7Days ? ` · ${formatMoney(rider.stats.tdsPaiseLast7Days)} TDS deducted` : ''}`}
+              />
               <Stat
                 label="Cash in hand"
                 value={formatMoney(rider.cash.inHandPaise)}
@@ -315,6 +320,8 @@ export default function RiderDetail() {
                 </Card>
 
                 <RiderDocuments rider={rider} onChange={state.setData} />
+
+                <PayoutAccountCard kind="rider" partyId={rider.id} account={rider.payoutAccount} onChanged={state.setData} />
 
                 <Card
                   title="Cash handed over"

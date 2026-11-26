@@ -9,14 +9,16 @@ import {
   View,
 } from 'react-native'
 import { Feather } from '@expo/vector-icons'
-import { useRouter } from 'expo-router'
+import { useFocusEffect, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { PayoutBreakdown, PayoutStatusPill } from '@/components/PayoutBreakdown'
 import {
   fetchEarnings,
   fetchHistory,
+  fetchPayoutAccount,
   fetchPayouts,
+  fetchTds,
   formatDay,
   formatPeriod,
   formatRupees,
@@ -24,7 +26,9 @@ import {
   type Delivery,
   type Earnings,
   type PayoutSummary,
+  type PayoutAccount,
   type Payouts,
+  type TdsSummary,
 } from '@/lib/delivery'
 import { colors, radius, shadow, space, type } from '@/theme'
 
@@ -39,6 +43,8 @@ export default function EarningsScreen() {
   const [days, setDays] = useState(7)
   const [earnings, setEarnings] = useState<Earnings | null>(null)
   const [payouts, setPayouts] = useState<Payouts | null>(null)
+  const [account, setAccount] = useState<PayoutAccount | null>(null)
+  const [accountLoaded, setAccountLoaded] = useState(false)
   const [recent, setRecent] = useState<Delivery[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -49,6 +55,13 @@ export default function EarningsScreen() {
     fetchPayouts()
       .then(setPayouts)
       .catch(() => setPayouts(null))
+
+    fetchPayoutAccount()
+      .then(loaded => {
+        setAccount(loaded)
+        setAccountLoaded(true)
+      })
+      .catch(() => setAccountLoaded(false))
 
     try {
       const [summary, history] = await Promise.all([fetchEarnings(range), fetchHistory()])
@@ -67,6 +80,18 @@ export default function EarningsScreen() {
     setLoading(true)
     load(days)
   }, [days, load])
+
+  // Back from the bank screen: show the account's new status.
+  useFocusEffect(
+    useCallback(() => {
+      fetchPayoutAccount()
+        .then(loaded => {
+          setAccount(loaded)
+          setAccountLoaded(true)
+        })
+        .catch(() => {})
+    }, []),
+  )
 
   const totals = earnings?.totals
   const rule = earnings?.payRule
@@ -134,6 +159,7 @@ export default function EarningsScreen() {
                   <Line label="Delivery pay" value={formatRupees(totals.basePaise)} />
                 )}
                 <Line label="Incentives" value={formatRupees(totals.incentivePaise)} />
+                {totals.tdsPaise ? <Line label="TDS deducted" value={`− ${formatRupees(totals.tdsPaise)}`} /> : null}
                 <Line label="Tips from customers" value={formatRupees(totals.tipsPaise)} />
               </View>
               <Text style={styles.rule}>
@@ -142,6 +168,29 @@ export default function EarningsScreen() {
                   : 'How you are paid: base pay per delivery, distance pay per km, incentives, and every rupee of a customer tip.'}
               </Text>
             </View>
+          ) : null}
+
+          {accountLoaded && (!account || account.status !== 'verified') ? (
+            <Pressable style={styles.bankBanner} onPress={() => router.push('/bank')}>
+              <Feather name="alert-circle" size={18} color={colors.warning} />
+              <View style={styles.flex}>
+                <Text style={styles.bankTitle}>
+                  {!account
+                    ? 'Add your bank account or UPI'
+                    : account.status === 'rejected'
+                      ? 'Your payout account was rejected'
+                      : 'Your payout account is being checked'}
+                </Text>
+                <Text style={styles.bankText}>
+                  {!account
+                    ? 'Foodos can only send a payout to a verified account.'
+                    : account.status === 'rejected'
+                      ? account.rejectReason || 'Please check your details and save them again.'
+                      : 'Foodos checks new details before sending money to them.'}
+                </Text>
+              </View>
+              <Feather name="chevron-right" size={18} color={colors.faint} />
+            </Pressable>
           ) : null}
 
           {earnings && earnings.cash.inHandPaise > 0 ? (
@@ -183,13 +232,18 @@ export default function EarningsScreen() {
                           {day.deliveries} deliver{day.deliveries === 1 ? 'y' : 'ies'} · {day.distanceKm} km
                         </Text>
                       </View>
-                      <Text style={styles.rowValue}>{formatRupees(day.earningsPaise)}</Text>
+                      <View style={styles.rowEnd}>
+                        <Text style={styles.rowValue}>{formatRupees(day.earningsPaise)}</Text>
+                        {day.tdsPaise ? <Text style={styles.rowHint}>TDS {formatRupees(day.tdsPaise)}</Text> : null}
+                      </View>
                     </View>
                   ))}
                 </View>
               )}
             </>
           ) : null}
+
+          <TdsCard />
 
           <Text style={styles.sectionTitle}>Recent deliveries</Text>
           {recent.length === 0 ? (
@@ -331,6 +385,83 @@ function PayoutsSection({ payouts, onOpen }: { payouts: Payouts; onOpen: (payout
   )
 }
 
+function monthName(month: string): string {
+  const [y, m] = month.split('-').map(Number)
+
+  return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
+}
+
+// Tax deducted at source on the rider's pay (tips are not taxed by Foodos),
+// for one financial year, 1 April to 31 March.
+function TdsCard() {
+  const [fy, setFy] = useState<number | undefined>(undefined)
+  const [tds, setTds] = useState<TdsSummary | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    let current = true
+
+    setFailed(false)
+    fetchTds(fy)
+      .then(result => current && setTds(result))
+      .catch(() => current && setFailed(true))
+
+    return () => {
+      current = false
+    }
+  }, [fy])
+
+  // "2026-27" -> the year it starts, to step back to the year before.
+  const startYear = tds ? Number(tds.financialYear.slice(0, 4)) : fy
+  const viewingPrevious = fy !== undefined && tds != null && Number(tds.financialYear.slice(0, 4)) === fy
+
+  if (failed && !tds) return null
+  if (!tds) return null
+
+  return (
+    <>
+      <Text style={styles.sectionTitle}>TDS this financial year</Text>
+      <View style={styles.card}>
+        <View style={styles.tdsBody}>
+          <Text style={styles.tdsYear}>Financial year {tds.financialYear}</Text>
+          <Line label="Earnings (excluding tips)" value={formatRupees(tds.earningsPaise)} />
+          <Line label="TDS deducted" value={formatRupees(tds.tdsPaise)} />
+          <Text style={styles.rule}>
+            Tips are not taxed by Foodos. TDS is deducted from your base pay, distance pay and incentives.
+          </Text>
+
+          <View style={styles.tdsActions}>
+            <Pressable onPress={() => setOpen(value => !value)} style={styles.tdsLink}>
+              <Text style={styles.tdsLinkText}>{open ? 'Hide months' : 'Show months'}</Text>
+              <Feather name={open ? 'chevron-up' : 'chevron-down'} size={16} color={colors.brand} />
+            </Pressable>
+            {startYear ? (
+              <Pressable onPress={() => setFy(viewingPrevious ? undefined : startYear - 1)} style={styles.tdsLink}>
+                <Text style={styles.tdsLinkText}>
+                  {viewingPrevious ? 'Back to this year' : `View ${startYear - 1}-${String(startYear).slice(2)}`}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+
+        {open
+          ? tds.months.map((month, index) => (
+              <View key={month.month} style={[styles.row, index === tds.months.length - 1 && styles.rowLast]}>
+                <View style={styles.flex}>
+                  <Text style={styles.rowTitle}>{monthName(month.month)}</Text>
+                  <Text style={styles.rowHint}>Earned {formatRupees(month.earningsPaise)}</Text>
+                </View>
+                <Text style={styles.rowValue}>TDS {formatRupees(month.tdsPaise)}</Text>
+              </View>
+            ))
+          : null}
+      </View>
+    </>
+  )
+}
+
 function Line({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.line}>
@@ -402,6 +533,22 @@ const styles = StyleSheet.create({
   cashValue: { ...type.title, color: colors.warning, marginTop: space.xs },
   cashHint: { ...type.caption, color: colors.warning, marginTop: space.xs, lineHeight: 16 },
 
+  bankBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    marginTop: space.md,
+    padding: space.md,
+    borderRadius: radius.lg,
+    backgroundColor: colors.warningSoft,
+  },
+  bankTitle: { ...type.smallStrong, color: colors.warning },
+  bankText: { ...type.caption, color: colors.body, marginTop: 2, lineHeight: 16 },
+  tdsBody: { padding: space.lg },
+  tdsYear: { ...type.smallStrong, color: colors.ink, marginBottom: space.xs },
+  tdsActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: space.md },
+  tdsLink: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: space.xs },
+  tdsLinkText: { ...type.smallStrong, color: colors.brand },
   sectionTitle: { ...type.overline, color: colors.muted, marginTop: space.xl, marginBottom: space.sm },
   emptyText: { ...type.small, color: colors.muted },
 

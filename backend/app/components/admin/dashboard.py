@@ -5,6 +5,7 @@ restaurant and rider apps, so the figures agree with what partners see.
 """
 
 from ...database import fetch, fetchrow
+from ..payouts import settings as payment_settings
 from ..support import service as support_service
 
 # How long an order can sit before someone at Foodos should look at it. An
@@ -34,14 +35,29 @@ async def overview() -> dict:
           count(*)::int as placed,
           count(*) filter (where o.status = 'delivered')::int as delivered,
           count(*) filter (where o.status = 'cancelled')::int as cancelled,
-          coalesce(sum(o.total_paise) filter (where o.status = 'delivered'), 0)::bigint as delivered_paise,
-          coalesce(sum(round(o.subtotal_paise * r.commission_pct / 100)) filter (where o.status = 'delivered'), 0)::bigint
-            as commission_paise
+          coalesce(sum(o.total_paise) filter (where o.status = 'delivered'), 0)::bigint as delivered_paise
         from orders o
-        join restaurants r on r.id = o.restaurant_id
         where o.placed_at >= date_trunc('day', now())
         """
     )
+
+    # Commission by the same per-order rule as the ledger (food + packaging,
+    # plus the gateway fee on online orders), so the numbers agree.
+    delivered_today = await fetch(
+        """
+        select o.subtotal_paise, o.packaging_fee_paise, o.discount_paise, o.discount_funded_by, o.payment_method,
+               r.commission_pct
+        from orders o join restaurants r on r.id = o.restaurant_id
+        where o.placed_at >= date_trunc('day', now()) and o.status = 'delivered'
+        """
+    )
+    shares = [
+        payment_settings.restaurant_share(
+            o["subtotal_paise"], o["packaging_fee_paise"], float(o["commission_pct"]), o["discount_paise"],
+            o["discount_funded_by"], o["payment_method"],
+        )
+        for o in delivered_today
+    ]
 
     live = await fetchrow(
         """
@@ -166,7 +182,8 @@ async def overview() -> dict:
             "delivered": delivered,
             "cancelled": today["cancelled"],
             "deliveredPaise": int(today["delivered_paise"]),
-            "commissionPaise": int(today["commission_paise"]),
+            "commissionPaise": sum(s["commissionPaise"] for s in shares),
+            "gatewayFeePaise": sum(s["gatewayFeePaise"] for s in shares),
             "averageOrderPaise": int(today["delivered_paise"]) // delivered if delivered else 0,
         },
         "live": {

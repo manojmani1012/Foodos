@@ -145,8 +145,10 @@ class TestEarnings:
         packaging = done["packagingFeePaise"]
         assert body["totals"]["orders"] == 1
         assert body["totals"]["foodPaise"] == food
-        assert body["totals"]["commissionPaise"] == round(food * 0.20)
-        assert body["totals"]["earningsPaise"] == food + packaging - round(food * 0.20)
+        # Commission is on food + packaging; the cash order pays no gateway fee.
+        assert body["totals"]["commissionPaise"] == round((food + packaging) * 0.20)
+        assert body["totals"]["gatewayFeePaise"] == 0
+        assert body["totals"]["earningsPaise"] == food + packaging - round((food + packaging) * 0.20)
         assert len(body["daily"]) == 7
         # The order still cooking is not earned yet, but is not hidden either.
         assert body["inProgress"] == {"orders": 1, "foodPaise": cooking["subtotalPaise"]}

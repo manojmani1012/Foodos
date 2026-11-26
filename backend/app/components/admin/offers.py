@@ -25,6 +25,7 @@ COLUMNS = {
     "validFrom": "valid_from",
     "validUntil": "valid_until",
     "isActive": "is_active",
+    "fundedBy": "funded_by",
 }
 
 SELECT = """
@@ -81,6 +82,7 @@ def _to_dict(row: Any) -> dict:
         "validFrom": row["valid_from"].isoformat(),
         "validUntil": row["valid_until"].isoformat() if row["valid_until"] else None,
         "isActive": row["is_active"],
+        "fundedBy": row["funded_by"],
         "state": _state(row),
         "redemptions": row["redemptions"],
         "discountGivenPaise": int(row["discount_given"]),
@@ -190,7 +192,7 @@ async def update_offer(offer_id: str, body: Any, actor_id: uuid.UUID, ip: Option
     identifier = as_uuid(offer_id)
     changes = body.model_dump(exclude_unset=True)
 
-    for required in ("name", "code", "type", "minOrderPaise", "firstOrderOnly", "perUserLimit", "validFrom", "isActive"):
+    for required in ("name", "code", "type", "minOrderPaise", "firstOrderOnly", "perUserLimit", "validFrom", "isActive", "fundedBy"):
         if required in changes and changes[required] is None:
             raise bad_request("field_required", f"{required} cannot be empty")
 
