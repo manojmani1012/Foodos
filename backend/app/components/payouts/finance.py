@@ -1,5 +1,5 @@
-"""The admin finance page: money in, money owed, payouts by status, the
-ledger rows still waiting for a batch, and CSV reports for the accountant.
+"""The admin finance page: money in, money owed, payouts by status and the
+ledger rows still waiting for a batch. The downloads are in reports.py.
 
 Collections and commission are counted over a period (delivered orders, by
 India date). What is payable is "now": every ledger row not yet in a paid
@@ -7,15 +7,13 @@ payout. Riders who hold more cash than they have earned owe Foodos, and are
 shown apart, not netted against what other riders are owed.
 """
 
-import csv
 import datetime
-import io
 import json
 from typing import Any, Optional
 
 from ...database import fetch, fetchrow, fetchval
 from ...errors import bad_request, not_found
-from . import ledger, schedule, tds
+from . import ledger, schedule
 from . import settings as payment_settings
 from .party import entries_of
 from .views import BLOCKED_SQL, PAYOUT_SELECT, payout_row
@@ -337,149 +335,3 @@ async def run_now() -> int:
     await schedule.send_reminders()
 
     return created
-
-
-# --- CSV reports -------------------------------------------------------------
-
-
-def _rupees(paise: Any) -> str:
-    paise = int(paise or 0)
-    sign = "-" if paise < 0 else ""
-    paise = abs(paise)
-
-    return f"{sign}{paise // 100}.{paise % 100:02d}"
-
-
-def _iso(value: Any) -> str:
-    return value.isoformat() if value is not None else ""
-
-
-async def report(kind: str, date_from: Optional[datetime.date], date_to: Optional[datetime.date]) -> tuple[str, str]:
-    """(filename, CSV text). Amounts are in rupees with two decimals, which is
-    what a spreadsheet and an accountant expect."""
-    start, end = await period(date_from, date_to)
-    out = io.StringIO()
-    writer = csv.writer(out)
-
-    if kind == "collections":
-        writer.writerow(
-            ["Delivered on", "Order", "Restaurant", "Payment method", "Food", "Packaging", "Delivery fee", "Tax",
-             "Tip", "Discount", "Total", "Refunded"]
-        )
-        rows = await fetch(
-            f"""
-            select {DELIVERED_ON} as day, o.order_number, r.name, o.payment_method, o.subtotal_paise,
-                   o.packaging_fee_paise, o.delivery_fee_paise, o.tax_paise, o.tip_paise, o.discount_paise,
-                   o.total_paise,
-                   (select coalesce(sum(f.amount_paise), 0) from refunds f
-                     where f.order_id = o.id and f.status <> 'failed') as refunded
-            from orders o join restaurants r on r.id = o.restaurant_id
-            where o.status = 'delivered' and not o.is_test and {DELIVERED_ON} between $1 and $2
-            order by 1, o.order_number
-            """,
-            start,
-            end,
-        )
-
-        for row in rows:
-            writer.writerow(
-                [_iso(row["day"]), row["order_number"], row["name"], row["payment_method"]]
-                + [_rupees(row[k]) for k in ("subtotal_paise", "packaging_fee_paise", "delivery_fee_paise",
-                                              "tax_paise", "tip_paise", "discount_paise", "total_paise", "refunded")]
-            )
-    elif kind == "payouts":
-        writer.writerow(
-            ["Payout id", "Party type", "Name", "Phone", "Status", "Payout date", "Period start", "Period end",
-             "Gross", "Commission", "Adjustments", "Net", "Bank reference", "Paid at", "Bank verified", "Pay to"]
-        )
-        rows = await fetch(
-            f"""
-            {PAYOUT_SELECT}
-            where coalesce(p.scheduled_for, p.period_end) between $1 and $2
-            order by coalesce(p.scheduled_for, p.period_end), party_name
-            """,
-            start,
-            end,
-        )
-
-        for row in rows:
-            item = payout_row(row)
-            writer.writerow(
-                [item["id"], item["partyType"], item["partyName"], item["contact"]["phone"], item["status"],
-                 item["scheduledFor"] or "", item["periodStart"], item["periodEnd"], _rupees(item["grossPaise"]),
-                 _rupees(item["commissionPaise"]), _rupees(item["adjustmentsPaise"]), _rupees(item["netPaise"]),
-                 item["reference"] or "", item["paidAt"] or "", "yes" if item["bank"]["verified"] else "no",
-                 item["bank"]["summary"] or ""]
-            )
-    elif kind == "ledger":
-        writer.writerow(
-            ["Entry", "Business date", "Party type", "Name", "Kind", "Order", "Amount", "Payout id", "Payout status",
-             "Held out", "Note", "Created at"]
-        )
-        rows = await fetch(
-            """
-            select e.id, e.business_date, e.party_type, coalesce(r.name, u.full_name) as name, e.kind,
-                   o.order_number, e.amount_paise, e.payout_id, p.status as payout_status, e.excluded_reason,
-                   e.note, e.created_at
-            from earnings_entries e
-            left join restaurants r on r.id = e.restaurant_id
-            left join users u on u.id = e.partner_id
-            left join orders o on o.id = e.order_id
-            left join payouts p on p.id = e.payout_id
-            where e.business_date between $1 and $2
-            order by e.business_date, e.id
-            """,
-            start,
-            end,
-        )
-
-        for row in rows:
-            writer.writerow(
-                [row["id"], _iso(row["business_date"]), row["party_type"], row["name"], row["kind"],
-                 row["order_number"] or "", _rupees(row["amount_paise"]), str(row["payout_id"] or ""),
-                 row["payout_status"] or "", row["excluded_reason"] or "", row["note"] or "", _iso(row["created_at"])]
-            )
-    elif kind == "commission":
-        writer.writerow(
-            ["Restaurant", "Plan", "Orders", "Food", "Packaging", "Commission", "Gateway fee",
-             "GST on commission and gateway fee", "TDS", "Coupons paid by restaurant", "Bank offers (not charged)",
-             "Restaurant share"]
-        )
-        rows = await fetch(
-            """
-            select r.name, r.commission_plan, count(*)::int as orders,
-                   sum((e.breakdown->>'foodPaise')::bigint) as food,
-                   sum((e.breakdown->>'packagingPaise')::bigint) as packaging,
-                   sum((e.breakdown->>'commissionPaise')::bigint) as commission,
-                   sum(coalesce((e.breakdown->>'gatewayFeePaise')::bigint, 0)) as gateway,
-                   sum((e.breakdown->>'gstOnCommissionPaise')::bigint) as gst,
-                   sum((e.breakdown->>'tdsPaise')::bigint) as tds,
-                   sum(coalesce((e.breakdown->>'discountPaise')::bigint, 0)) as discount,
-                   sum(coalesce((e.breakdown->>'bankOfferPaise')::bigint, 0)) as bank_offer,
-                   sum(e.amount_paise) as share
-            from earnings_entries e join restaurants r on r.id = e.restaurant_id
-            where e.kind = 'order' and e.business_date between $1 and $2
-            group by r.id
-            order by r.name
-            """,
-            start,
-            end,
-        )
-
-        for row in rows:
-            writer.writerow(
-                [row["name"], row["commission_plan"], row["orders"]]
-                + [_rupees(row[k]) for k in ("food", "packaging", "commission", "gateway", "gst", "tds", "discount",
-                                              "bank_offer", "share")]
-            )
-    elif kind == "tds":
-        writer.writerow(["Rider", "Phone", "Deliveries", "Earnings (excluding tips)", "TDS deducted"])
-
-        for row in await tds.report_rows(start, end):
-            writer.writerow(
-                [row["full_name"], row["phone"] or "", row["deliveries"], _rupees(row["earnings"]), _rupees(row["tds"])]
-            )
-    else:
-        raise not_found("report_not_found", "There is no such report")
-
-    return f"foodos-{kind}-{start.isoformat()}-to-{end.isoformat()}.csv", out.getvalue()

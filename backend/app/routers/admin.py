@@ -12,7 +12,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import Response
 
-from ..components.payouts import bank, finance, ledger, schedule
+from ..components.payouts import bank, finance, ledger, reports, schedule
 from ..components.payouts import settings as payment_settings
 
 from ..components.admin import (
@@ -614,18 +614,21 @@ async def include_excluded(body: Optional[IncludeExcludedBody] = None, actor: Ac
     return {"ok": True, "included": included}
 
 
-@router.get("/finance/reports/{kind}.csv")
+@router.get("/finance/reports/{kind}.{format_}")
 async def finance_report(
-    kind: Literal["collections", "payouts", "ledger", "commission", "tds"],
+    kind: Literal["collections", "commission", "payouts", "refunds", "tax", "riders", "ledger", "tds"],
+    format_: Literal["csv", "xlsx", "pdf"],
     dateFrom: Optional[datetime.date] = None,
     dateTo: Optional[datetime.date] = None,
+    restaurantId: Optional[str] = Query(default=None, max_length=64),
+    riderId: Optional[str] = Query(default=None, max_length=64),
     user: CurrentUser = Depends(admin_only),
 ):
-    filename, text = await finance.report(kind, dateFrom, dateTo)
+    filename, media_type, content = await reports.report(kind, format_, dateFrom, dateTo, restaurantId, riderId)
 
     return Response(
-        content=text.encode("utf-8"),
-        media_type="text/csv; charset=utf-8",
+        content=content,
+        media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "private, no-store"},
     )
 

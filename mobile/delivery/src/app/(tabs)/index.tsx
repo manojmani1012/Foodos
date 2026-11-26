@@ -44,6 +44,9 @@ export default function HomeScreen() {
   const router = useRouter()
 
   const [partner, setPartner] = useState<Partner | null>(null)
+  // Kept after thanking: the next refresh drops the tip, and the banner would
+  // vanish before the rider saw that their thanks went.
+  const [thanked, setThanked] = useState<Partner['tipToThank']>(null)
   const [active, setActive] = useState<Delivery | null>(null)
   const [offers, setOffers] = useState<Offer[]>([])
   const [loading, setLoading] = useState(true)
@@ -106,6 +109,8 @@ export default function HomeScreen() {
       }
     }, [load]),
   )
+
+  const tipShown = partner?.tipToThank ?? thanked
 
   const sharing = !!partner && partner.status === 'active' && (partner.isOnline || !!active)
 
@@ -244,8 +249,8 @@ export default function HomeScreen() {
           </Pressable>
         ) : null}
 
-        {approved && partner?.tipToThank ? (
-          <TipBanner key={partner.tipToThank.deliveryId} tip={partner.tipToThank} />
+        {approved && tipShown ? (
+          <TipBanner key={tipShown.deliveryId} tip={tipShown} onSent={() => setThanked(tipShown)} />
         ) : null}
 
         <View style={styles.statsRow}>
@@ -423,7 +428,7 @@ function Leg({ icon, title, detail }: { icon: keyof typeof Feather.glyphMap; tit
 
 // "Complete 15 trips, earn ₹250 extra": each target with today's progress.
 // "You got a tip": all of it is the rider's, and they can thank the customer.
-function TipBanner({ tip }: { tip: NonNullable<Partner['tipToThank']> }) {
+function TipBanner({ tip, onSent }: { tip: NonNullable<Partner['tipToThank']>; onSent: () => void }) {
   const [state, setState] = useState<'ask' | 'sending' | 'sent' | 'failed'>('ask')
 
   async function thank() {
@@ -431,6 +436,7 @@ function TipBanner({ tip }: { tip: NonNullable<Partner['tipToThank']> }) {
 
     try {
       await thankForTip(tip.deliveryId)
+      onSent()
       setState('sent')
     } catch {
       setState('failed')
@@ -688,6 +694,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: space.md,
     padding: space.md,
+    marginBottom: space.md,
     borderRadius: radius.lg,
     backgroundColor: colors.brandSoft,
   },

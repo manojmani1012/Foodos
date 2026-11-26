@@ -59,7 +59,7 @@ async def rider_year(partner_id: uuid.UUID, fy: Optional[int]) -> dict:
     }
 
 
-async def report_rows(start: datetime.date, end: datetime.date) -> list:
+async def report_rows(start: datetime.date, end: datetime.date, partner_id: Optional[uuid.UUID] = None) -> list:
     """Rider-wise: deliveries, earnings excluding tips, TDS deducted."""
     return await fetch(
         f"""
@@ -68,9 +68,11 @@ async def report_rows(start: datetime.date, end: datetime.date) -> list:
         from earnings_entries e
         join users u on u.id = e.partner_id
         where e.kind in ('delivery', 'incentive') and e.business_date between $1 and $2
+          and ($3::uuid is null or e.partner_id = $3)
         group by u.id
         order by u.full_name
         """,
         start,
         end,
+        partner_id,
     )

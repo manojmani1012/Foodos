@@ -73,6 +73,14 @@ class TestAdminProof:
         order, *_ = await delivered_cash_order(client)
         assert (await refund(client, admin, order["id"])).status_code == 400
 
+    async def test_unfinished_attempts_never_use_up_an_orders_photos(self, client, admin):
+        order, *_ = await delivered_cash_order(client)
+        ids = [await admin_photo(client, admin, order["id"]) for _ in range(14)]
+
+        assert await fetchval("select count(*) from refund_photos") == 10
+        assert await fetchval("select count(*) from media") == 10, "the replaced images are deleted"
+        assert (await refund(client, admin, order["id"], issue="food", photoIds=[ids[-1]])).status_code == 200
+
     async def test_only_photos_are_accepted(self, client, admin):
         order, *_ = await delivered_cash_order(client)
         response = await upload(client, f"/api/v1/admin/orders/{order['id']}/refund-photos", admin, b"%PDF-1.4")

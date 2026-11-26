@@ -3,11 +3,13 @@ short-lived signed link (see components/payouts/statements.py). The page has
 no scripts, so the policy below allows none."""
 
 import html
+from typing import Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
-from ..components.payouts.statements import check_link, render
+from ..components.payouts.statements import check_link, render, render_pdf
 from ..errors import AppError
 
 router = APIRouter(tags=["statements"])
@@ -24,9 +26,25 @@ HEADERS = {
 
 
 @router.get("/api/v1/statements/{payout_id}")
-async def get_statement(payout_id: str, e: int = Query(...), s: str = Query(..., max_length=128)):
+async def get_statement(
+    payout_id: str,
+    e: int = Query(...),
+    s: str = Query(..., max_length=128),
+    format: Literal["html", "pdf"] = "html",
+):
     try:
-        page = await render(check_link(payout_id, e, s))
+        identifier = check_link(payout_id, e, s)
+
+        if format == "pdf":
+            filename, content = await render_pdf(identifier)
+
+            return Response(
+                content=content,
+                media_type="application/pdf",
+                headers={**HEADERS, "Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+
+        page = await render(identifier, f"?e={e}&s={quote(s)}&format=pdf")
     except AppError as error:
         # Opened in a browser, so the problem is a page, not JSON.
         return HTMLResponse(

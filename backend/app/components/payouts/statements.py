@@ -19,6 +19,7 @@ from ...config import get_settings
 from ...database import fetch, fetchrow
 from ...errors import AppError, not_found
 from ..orders.invoice import INDIA
+from . import export
 from .views import PAYOUT_SELECT, payout_breakdown
 
 LINK_SECONDS = 15 * 60
@@ -38,6 +39,7 @@ KIND_NAMES = {
     "delivery": "Delivery",
     "cash_collected": "Cash collected",
     "cash_deposit": "Cash handed over",
+    "incentive": "Shift incentive",
     "refund": "Refund",
     "adjustment": "Adjustment",
 }
@@ -110,7 +112,8 @@ def _day(value: Optional[Any]) -> str:
     return value.strftime("%d %b %Y") if value else ""
 
 
-async def render(payout_id: uuid.UUID) -> str:
+async def _load(payout_id: uuid.UUID) -> tuple[Any, dict, list]:
+    """The payout, its summed breakdown and its lines."""
     row = await fetchrow(f"{PAYOUT_SELECT} where p.id = $1", payout_id)
 
     if row is None:
@@ -127,6 +130,101 @@ async def render(payout_id: uuid.UUID) -> str:
         """,
         payout_id,
     )
+
+    return row, breakdown, entries
+
+
+def _bank_line(row: Any) -> str:
+    """Where the money goes, with the account number masked."""
+    number, bank_name, upi = (
+        (row["account_number"], row["bank_name"], None)
+        if row["party_type"] == "restaurant"
+        else (row["rider_account_number"], row["rider_bank_name"], row["rider_upi_id"])
+    )
+
+    if number:
+        return f"{bank_name or 'Bank'} account XXXXXX{number[-4:]}"
+
+    return f"UPI {upi}" if upi else ""
+
+
+def _detail(entry: Any) -> str:
+    b = entry["breakdown"]
+    b = json.loads(b) if isinstance(b, str) else (b or {})
+    parts = []
+
+    if entry["kind"] == "order":
+        parts.append(f"food {_money(b.get('foodPaise', 0))}, commission {b.get('commissionPct', 0):g}%")
+
+        if b.get("discountPaise"):
+            parts.append(f"coupon {_money(b['discountPaise'])} paid by restaurant")
+        if b.get("bankOfferPaise"):
+            parts.append(f"bank offer {_money(b['bankOfferPaise'])} (not charged)")
+    elif entry["kind"] == "delivery" and b.get("distanceKm") is not None:
+        parts.append(f"{b['distanceKm']:.1f} km")
+
+    if entry["note"]:
+        parts.append(entry["note"])
+
+    return "; ".join(parts)
+
+
+async def render_pdf(payout_id: uuid.UUID) -> tuple[str, bytes]:
+    row, breakdown, entries = await _load(payout_id)
+    party_type = row["party_type"]
+    pdf = export.new_pdf(5)
+    export.pdf_heading(pdf, "Foodos payout statement", 16)
+    facts = [
+        row["party_name"] or "",
+        _bank_line(row),
+        f"Period: {_day(row['period_start'])} to {_day(row['period_end'])}",
+        f"Payout date: {_day(row['scheduled_for'])}",
+        f"Status: {STATUS_NAMES.get(row['status'], row['status'])}",
+    ]
+
+    if row["status"] == "paid" and row["paid_at"]:
+        facts.append(f"Paid on: {row['paid_at'].astimezone(INDIA).strftime('%d %b %Y, %I:%M %p')}")
+        facts.append(f"Bank reference: {row['payout_reference'] or ''}")
+
+    for fact in filter(None, facts):
+        export.pdf_heading(pdf, fact, 10, "")
+
+    pdf.ln(3)
+    summary_lines = RESTAURANT_LINES if party_type == "restaurant" else RIDER_LINES
+    summary = [
+        [label, export.rupees(sign * breakdown[key])] for key, label, sign in summary_lines if breakdown.get(key)
+    ]
+    summary.append(["Net payout", export.rupees(row["net_paise"])])
+    export.pdf_table(pdf, ["Summary", "Rupees"], summary, [False, True], [70, 30], bold_last=True, size=9)
+    pdf.ln(5)
+    details = [
+        [
+            _day(entry["business_date"]),
+            KIND_NAMES.get(entry["kind"], entry["kind"]),
+            f"#{entry['order_number']}" if entry["order_number"] else "",
+            _detail(entry),
+            export.rupees(entry["amount_paise"]),
+        ]
+        for entry in entries
+    ]
+
+    if details:
+        export.pdf_table(
+            pdf, ["Day", "What", "Order", "Details", "Rupees"], details,
+            [False, False, False, False, True], [17, 18, 17, 34, 14], size=8,
+        )
+
+    pdf.ln(3)
+    export.pdf_heading(
+        pdf, f"Statement {row['id']} from {get_settings().invoice_company_name}. Amounts are in Indian rupees.", 8, ""
+    )
+
+    return f"foodos-statement-{row['period_end'].isoformat()}.pdf", bytes(pdf.output())
+
+
+async def render(payout_id: uuid.UUID, pdf_href: Optional[str] = None) -> str:
+    row, breakdown, entries = await _load(payout_id)
+    party_type = row["party_type"]
     settings = get_settings()
     e = html.escape
 
@@ -138,30 +236,10 @@ async def render(payout_id: uuid.UUID) -> str:
     )
     summary += f"<tr><th>Net payout</th><th class='n'>{_money(row['net_paise'])}</th></tr>"
 
-    def detail(entry: Any) -> str:
-        b = entry["breakdown"]
-        b = json.loads(b) if isinstance(b, str) else (b or {})
-        parts = []
-
-        if entry["kind"] == "order":
-            parts.append(f"food {_money(b.get('foodPaise', 0))}, commission {b.get('commissionPct', 0):g}%")
-
-            if b.get("discountPaise"):
-                parts.append(f"coupon {_money(b['discountPaise'])} paid by restaurant")
-            if b.get("bankOfferPaise"):
-                parts.append(f"bank offer {_money(b['bankOfferPaise'])} (not charged)")
-        elif entry["kind"] == "delivery" and b.get("distanceKm") is not None:
-            parts.append(f"{b['distanceKm']:.1f} km")
-
-        if entry["note"]:
-            parts.append(entry["note"])
-
-        return e("; ".join(parts))
-
     lines = "".join(
         f"<tr><td>{_day(entry['business_date'])}</td><td>{e(KIND_NAMES.get(entry['kind'], entry['kind']))}</td>"
         f"<td>{'#' + e(entry['order_number']) if entry['order_number'] else ''}</td>"
-        f"<td class='sub'>{detail(entry)}</td><td class='n'>{_money(entry['amount_paise'])}</td></tr>"
+        f"<td class='sub'>{e(_detail(entry))}</td><td class='n'>{_money(entry['amount_paise'])}</td></tr>"
         for entry in entries
     )
 
@@ -173,18 +251,7 @@ async def render(payout_id: uuid.UUID) -> str:
             f"<div><strong>Bank reference</strong> {e(row['payout_reference'] or '')}</div>"
         )
 
-    bank = ""
-
-    number, bank_name, upi = (
-        (row["account_number"], row["bank_name"], None)
-        if party_type == "restaurant"
-        else (row["rider_account_number"], row["rider_bank_name"], row["rider_upi_id"])
-    )
-
-    if number:
-        bank = f"{e(bank_name or 'Bank')} account XXXXXX{e(number[-4:])}"
-    elif upi:
-        bank = f"UPI {e(upi)}"
+    bank = e(_bank_line(row))
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -217,5 +284,6 @@ async def render(payout_id: uuid.UUID) -> str:
   <table><thead><tr><th>Day</th><th>What</th><th>Order</th><th>Details</th><th class="n">Amount</th></tr></thead>
     <tbody>{lines}</tbody></table>
   <p class="note">Statement {e(str(row['id']))} from {e(settings.invoice_company_name)}. Amounts are in Indian rupees.
-    To save it, use your browser's Print or Share menu and choose Save as PDF.</p>
+    To print it, use your browser's Print or Share menu.</p>
+  {f'<p><a href="{e(pdf_href)}">Download as PDF</a></p>' if pdf_href else ''}
 </main></body></html>"""

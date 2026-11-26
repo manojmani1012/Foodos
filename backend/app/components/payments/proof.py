@@ -15,7 +15,7 @@ from typing import Any, Optional
 from ...database import execute, fetch, fetchrow, fetchval, transaction
 from ...errors import AppError, bad_request, conflict, not_found
 from ..admin import audit
-from ..media.service import store_image
+from ..media.service import store_image, validate_image
 from . import refunds
 
 # How long after delivery a restaurant may ask for a refund.
@@ -33,17 +33,23 @@ def _id(value: str, code: str, message: str) -> uuid.UUID:
 
 
 async def add_photo(order_id: uuid.UUID, user_id: uuid.UUID, data: bytes) -> dict:
-    unused = await fetchval(
+    # Checked first, so a bad file never costs an earlier photo its place.
+    validate_image(data)
+    # Photos from attempts that were never finished make way for new ones, so
+    # an order can never fill up and refuse proof.
+    await execute(
         """
-        select count(*)::int from refund_photos
-        where order_id = $1 and uploaded_by = $2 and refund_id is null and request_id is null
+        delete from media where id in (
+          select media_id from refund_photos
+          where order_id = $1 and uploaded_by = $2 and refund_id is null and request_id is null
+          order by created_at desc, id
+          offset $3
+        )
         """,
         order_id,
         user_id,
+        MAX_UNUSED_PHOTOS - 1,
     )
-
-    if unused >= MAX_UNUSED_PHOTOS:
-        raise conflict("too_many_photos", "There are already many photos waiting for this order. Use or retry those")
 
     url = await store_image(user_id, data, private=True)
     photo_id = await fetchval(

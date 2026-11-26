@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import BankPayments from '../components/BankPayments'
+import Reports from '../components/Reports'
 import {
   Badge,
   Card,
@@ -17,7 +18,7 @@ import {
   StatusBadge,
   Tabs,
 } from '../components/ui'
-import { api, apiDownload } from '../lib/api'
+import { api } from '../lib/api'
 import {
   addDays,
   formatDate,
@@ -53,13 +54,6 @@ const PRESETS = [
   },
 ]
 
-const REPORTS = [
-  { kind: 'collections', label: 'Collections', hint: 'Every delivered order: how the customer paid, and refunds.' },
-  { kind: 'payouts', label: 'Payouts', hint: 'Payouts with their status, pay date and bank reference.' },
-  { kind: 'ledger', label: 'Ledger', hint: 'Every earning, refund, cash and adjustment line per partner.' },
-  { kind: 'commission', label: 'Commission', hint: 'Foodos commission, gateway fee and GST on them, per restaurant.' },
-  { kind: 'tds', label: 'Rider TDS', hint: 'Per rider: deliveries, earnings (without tips) and TDS deducted. Use a financial-year date range for the annual summary.' },
-]
 
 export const BLOCKER_LABEL: Record<PayoutBlocker, string> = {
   bank_missing: 'Bank details missing',
@@ -673,40 +667,6 @@ function UnpaidCard({ party, refreshKey, onChanged }: { party: string; refreshKe
   )
 }
 
-function Reports({ from, to }: { from: string; to: string }) {
-  const toast = useToast()
-  const [busy, setBusy] = useState('')
-
-  async function download(kind: string) {
-    setBusy(kind)
-    try {
-      await apiDownload(`/api/v1/admin/finance/reports/${kind}.csv`, { dateFrom: from, dateTo: to }, `foodos-${kind}-${from}-to-${to}.csv`)
-    } catch (caught: any) {
-      toast(caught?.message || 'Could not download the report', 'error')
-    } finally {
-      setBusy('')
-    }
-  }
-
-  return (
-    <Card title={`Reports, ${formatDay(from)} to ${formatDay(to)}`}>
-      <p className="muted small">CSV files that open in Excel or Google Sheets. Use the dates at the top of the page.</p>
-      <ul className="plain-list">
-        {REPORTS.map((report) => (
-          <li key={report.kind} className="row-between">
-            <span>
-              <strong>{report.label}</strong>
-              <div className="sub">{report.hint}</div>
-            </span>
-            <button className="btn btn-small" disabled={!!busy} onClick={() => download(report.kind)}>
-              {busy === report.kind ? 'Downloading…' : 'Download CSV'}
-            </button>
-          </li>
-        ))}
-      </ul>
-    </Card>
-  )
-}
 
 export default function Payouts() {
   const toast = useToast()
