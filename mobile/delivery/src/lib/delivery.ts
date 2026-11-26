@@ -40,7 +40,61 @@ export type Target = {
 
 // Cash from cash orders not yet handed over to Foodos. At the limit, only
 // prepaid orders are offered until it is deposited.
-export type CashInHand = { inHandPaise: number; limitPaise: number; limitReached: boolean }
+export type CashInHand = {
+  inHandPaise: number
+  limitPaise: number
+  limitReached: boolean
+  // What stops at the limit. Absent on older servers, which block cash orders.
+  blocks?: 'cash_orders' | 'all_orders'
+}
+
+export type CashDeposit = {
+  id: string
+  amountPaise: number
+  reference: string | null
+  recordedBy: string | null
+  online: boolean
+  createdAt: string
+}
+
+// What Razorpay's checkout is opened with.
+export type PaymentIntent = {
+  razorpayOrderId: string
+  keyId: string
+  amountPaise: number
+  currency: string
+  orderNumber: string
+  customer: { name: string | null; phone: string | null; email: string | null }
+}
+
+export function cashBlockText(cash: CashInHand): string {
+  return cash.blocks === 'all_orders' ? 'no new orders' : 'only prepaid orders'
+}
+
+export async function fetchCash(): Promise<{ cash: CashInHand; deposits: CashDeposit[] }> {
+  const body = await request('/api/v1/delivery/cash')
+
+  return { cash: body.cash, deposits: body.deposits }
+}
+
+export async function startCashDeposit(amountPaise: number): Promise<PaymentIntent> {
+  const { payment } = await request('/api/v1/delivery/cash/deposit', { method: 'POST', body: { amountPaise } })
+
+  return payment
+}
+
+export function confirmCashDeposit(result: {
+  razorpayOrderId: string
+  razorpayPaymentId: string
+  razorpaySignature: string
+}) {
+  const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = result
+
+  return request('/api/v1/delivery/cash/deposit/confirm', {
+    method: 'POST',
+    body: { razorpayOrderId, razorpayPaymentId, razorpaySignature },
+  })
+}
 
 export type TargetReached = { name: string; bonusPaise: number }
 

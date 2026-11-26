@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 
 import { PayoutBreakdown, PayoutStatusPill } from '@/components/PayoutBreakdown'
 import {
+  cashBlockText,
   fetchEarnings,
   fetchHistory,
   fetchPayoutAccount,
@@ -199,13 +200,16 @@ export default function EarningsScreen() {
               <Text style={styles.cashValue}>{formatRupees(earnings.cash.inHandPaise)}</Text>
               <Text style={styles.cashHint}>
                 Collected from customers on cash orders and not yet handed over. This belongs to Foodos:
-                hand it over, or it is taken off your next payout.
+                deposit it now or hand it over, or it is taken off your next payout.
                 {earnings.cash.limitPaise
                   ? earnings.cash.limitReached
-                    ? ` You have reached the ${formatRupees(earnings.cash.limitPaise)} limit, so you get only prepaid orders until you hand it over.`
-                    : ` At ${formatRupees(earnings.cash.limitPaise)} you get only prepaid orders until you hand it over.`
+                    ? ` You have reached the ${formatRupees(earnings.cash.limitPaise)} limit, so you get ${cashBlockText(earnings.cash)} until it is paid in.`
+                    : ` At ${formatRupees(earnings.cash.limitPaise)} you get ${cashBlockText(earnings.cash)} until it is paid in.`
                   : ''}
               </Text>
+              <Pressable style={styles.deposit} onPress={() => router.push('/cash')} accessibilityRole="button">
+                <Text style={styles.depositText}>Deposit now</Text>
+              </Pressable>
             </View>
           ) : null}
 
@@ -532,6 +536,15 @@ const styles = StyleSheet.create({
   cashTitle: { ...type.overline, color: colors.warning },
   cashValue: { ...type.title, color: colors.warning, marginTop: space.xs },
   cashHint: { ...type.caption, color: colors.warning, marginTop: space.xs, lineHeight: 16 },
+  deposit: {
+    alignSelf: 'flex-start',
+    marginTop: space.md,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.lg,
+    borderRadius: radius.pill,
+    backgroundColor: colors.warning,
+  },
+  depositText: { ...type.smallStrong, color: colors.surface },
 
   bankBanner: {
     flexDirection: 'row',

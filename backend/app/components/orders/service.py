@@ -10,6 +10,7 @@ from ...errors import AppError, bad_request, conflict, forbidden, not_found
 from ..delivery import service as delivery
 from ..geo import distance_km, ride_minutes
 from ..notifications import events
+from ..payouts import settings as payment_settings
 from ..payments import refunds
 from ..wallet import service as wallet_service
 from .delivery_code import code_required, new_code
@@ -323,10 +324,15 @@ async def place_order(
 
     from ..payments import razorpay as razorpay_client
 
+    if payment_method == "cod" and not payment_settings.current()["codEnabled"]:
+        raise bad_request(
+            "cod_unavailable", "Cash on delivery is not available. Please pay online or from your Foodos wallet"
+        )
+
     if payment_method not in ("cod", "wallet") and not razorpay_client.is_configured():
         raise bad_request(
             "payment_method_unavailable",
-            "Online payment is not available right now. Please choose cash on delivery",
+            "Online payment is not available right now. Please try again later",
         )
 
     if tip_paise < 0:

@@ -122,7 +122,13 @@ export default function CheckoutScreen() {
     icon: 'briefcase',
     enabled: walletPaise !== null && !walletShort,
   } as const
-  const options = [...METHODS, walletOption]
+  // Cash is shown only once the server has said it is on.
+  const codAvailable = !!quote?.codAvailable
+  const options = [...METHODS.filter(option => option.id !== 'cod' || codAvailable), walletOption]
+
+  useEffect(() => {
+    if (method === 'cod' && quote && !quote.codAvailable) setMethod('upi')
+  }, [method, quote])
 
   // A wallet that no longer covers the bill cannot stay chosen.
   useEffect(() => {

@@ -6,8 +6,10 @@ Every route acts on the signed-in rider only; there is no rider id in any path.
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
+from pydantic import BaseModel, Field
 
 from ..components.auth.dependencies import CurrentUser, require_role
+from ..components.delivery import deposits as cash_deposits
 from ..components.delivery import documents, service
 from ..components.delivery.schemas import (
     LocationBody,
@@ -128,6 +130,36 @@ async def delivered(delivery_id: str, body: Optional[StepBody] = None, user: Cur
 @router.get("/earnings")
 async def earnings(days: int = Query(default=7, ge=1, le=90), user: CurrentUser = Depends(rider_only)):
     return {"ok": True, **await service.earnings(user.id, days)}
+
+
+# "Deposit now": paying in the cash held, through Razorpay.
+class DepositBody(BaseModel):
+    amountPaise: int = Field(ge=100, le=10_000_000)
+
+
+class DepositConfirmBody(BaseModel):
+    razorpayOrderId: str = Field(min_length=1, max_length=100)
+    razorpayPaymentId: str = Field(min_length=1, max_length=100)
+    razorpaySignature: str = Field(min_length=1, max_length=200)
+
+
+@router.get("/cash")
+async def my_cash(user: CurrentUser = Depends(rider_only)):
+    return {"ok": True, **await cash_deposits.status(user.id)}
+
+
+@router.post("/cash/deposit")
+async def start_deposit(body: DepositBody, user: CurrentUser = Depends(rider_only)):
+    return {"ok": True, "payment": await cash_deposits.start(user.id, body.amountPaise)}
+
+
+@router.post("/cash/deposit/confirm")
+async def confirm_deposit(body: DepositConfirmBody, user: CurrentUser = Depends(rider_only)):
+    result = await cash_deposits.confirm(
+        user.id, body.razorpayOrderId, body.razorpayPaymentId, body.razorpaySignature
+    )
+
+    return {"ok": True, **result}
 
 
 @router.get("/tds")

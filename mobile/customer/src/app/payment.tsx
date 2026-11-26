@@ -141,8 +141,7 @@ export default function PaymentScreen() {
             <Text style={styles.title}>Payment not completed</Text>
             <Text style={styles.message}>{error}</Text>
             <Text style={styles.note}>
-              Your order is saved and has not been charged. You can try again, or pay the rider in
-              cash.
+              Your order is saved and has not been charged. You can try the payment again.
             </Text>
 
             <Pressable

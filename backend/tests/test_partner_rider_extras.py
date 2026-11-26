@@ -229,12 +229,12 @@ class TestCashLimit:
         after = (await me(client, arjun))["cash"]
         offered = await requests_for(client, arjun)
 
-        assert held == {"inHandPaise": delivered["totalPaise"], "limitPaise": 10000, "limitReached": True}
+        assert held == {"inHandPaise": delivered["totalPaise"], "limitPaise": 10000, "limitReached": True, "blocks": "cash_orders"}
         assert while_full == []
         assert too_much.json()["code"] == "deposit_too_large"
         assert deposit.status_code == 200, deposit.text
         assert deposit.json()["rider"]["cash"]["deposits"][0]["reference"] == "UPI 4471"
-        assert after == {"inHandPaise": 0, "limitPaise": 10000, "limitReached": False}
+        assert after == {"inHandPaise": 0, "limitPaise": 10000, "limitReached": False, "blocks": "cash_orders"}
         assert [o["orderNumber"] for o in offered] == [cash_order["orderNumber"]]
 
     async def test_prepaid_orders_still_reach_a_rider_at_the_limit(self, client, monkeypatch):

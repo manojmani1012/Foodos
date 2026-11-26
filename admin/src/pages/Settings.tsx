@@ -24,6 +24,10 @@ type Form = {
   cutoffTime: string
   minPayout: string
   reserve: string
+  codEnabled: boolean
+  // Empty: the server's own limit.
+  cashLimit: string
+  riderCashBlock: 'cash_orders' | 'all_orders'
   refundChargedToDefault: RefundChargedTo
   payoutSchedule: Group[]
 }
@@ -50,6 +54,9 @@ function toForm(settings: PaymentSettings): Form {
     cutoffTime: settings.cutoffTime,
     minPayout: rupees(settings.minPayoutPaise),
     reserve: rupees(settings.reservePaise ?? 1_000_000),
+    codEnabled: settings.codEnabled ?? true,
+    cashLimit: settings.riderCashLimitPaise == null ? '' : rupees(settings.riderCashLimitPaise),
+    riderCashBlock: settings.riderCashBlock ?? 'cash_orders',
     refundChargedToDefault: settings.refundChargedToDefault,
     payoutSchedule: settings.payoutSchedule.map((group) => ({ days: [...group.days].sort(), payWeekday: group.payWeekday })),
   }
@@ -231,7 +238,15 @@ function Holidays({ initial }: { initial: Holiday[] }) {
   )
 }
 
-function SettingsForm({ settings, onSaved }: { settings: PaymentSettings; onSaved: (settings: PaymentSettings) => void }) {
+function SettingsForm({
+  settings,
+  serverCashLimitPaise,
+  onSaved,
+}: {
+  settings: PaymentSettings
+  serverCashLimitPaise?: number
+  onSaved: (settings: PaymentSettings) => void
+}) {
   const toast = useToast()
   const [form, setForm] = useState<Form>(() => toForm(settings))
   const [busy, setBusy] = useState(false)
@@ -274,6 +289,9 @@ function SettingsForm({ settings, onSaved }: { settings: PaymentSettings; onSave
       cutoffTime: form.cutoffTime,
       minPayoutPaise: toPaise(form.minPayout),
       reservePaise: toPaise(form.reserve),
+      codEnabled: form.codEnabled,
+      riderCashLimitPaise: form.cashLimit.trim() === '' ? null : toPaise(form.cashLimit),
+      riderCashBlock: form.riderCashBlock,
       refundChargedToDefault: form.refundChargedToDefault,
       payoutSchedule: form.payoutSchedule.map((group) => ({ days: [...group.days].sort(), payWeekday: group.payWeekday })),
     }
@@ -419,6 +437,35 @@ function SettingsForm({ settings, onSaved }: { settings: PaymentSettings; onSave
         </p>
       </Card>
 
+      <Card title="Cash on delivery and floating cash">
+        <label className="check-row">
+          <input type="checkbox" checked={form.codEnabled} onChange={(e) => set('codEnabled', e.target.checked)} />
+          <span>Customers can pay cash on delivery</span>
+        </label>
+        <p className="muted small">
+          Turn this off at launch. Orders already placed are not affected.
+        </p>
+        <div className="form-grid two">
+          <Field
+            label="Most cash a rider may hold (₹)"
+            hint={`0 means no limit. Leave empty to use the server's limit${
+              serverCashLimitPaise == null ? '' : ` (${formatMoney(serverCashLimitPaise, { whole: true })})`
+            }.`}
+            error={fieldErrors.riderCashLimitPaise}
+          >
+            {(id) => <input id={id} className="input" inputMode="decimal" value={form.cashLimit} onChange={(e) => set('cashLimit', e.target.value)} />}
+          </Field>
+          <Field label="At the limit the rider gets" hint="Riders clear it with Deposit now in their app, or by handing cash to staff.">
+            {(id) => (
+              <select id={id} className="input" value={form.riderCashBlock} onChange={(e) => set('riderCashBlock', e.target.value as Form['riderCashBlock'])}>
+                <option value="cash_orders">Prepaid orders only</option>
+                <option value="all_orders">No new orders</option>
+              </select>
+            )}
+          </Field>
+        </div>
+      </Card>
+
       <Card title="Payout schedule">
         <p className="muted small">
           Earnings are grouped by the day they were made. Each group is paid on its pay day by Foodos staff, who send the money
@@ -484,7 +531,7 @@ function SettingsForm({ settings, onSaved }: { settings: PaymentSettings; onSave
 
 export default function Settings() {
   const state = useLoad(
-    () => api<{ settings: PaymentSettings; holidays: Holiday[] }>('/api/v1/admin/finance/settings'),
+    () => api<{ settings: PaymentSettings; holidays: Holiday[]; serverCashLimitPaise?: number }>('/api/v1/admin/finance/settings'),
     'payment-settings'
   )
 
@@ -497,7 +544,7 @@ export default function Settings() {
       <Loadable state={state}>
         {(data) => (
           <div className="stack">
-            <SettingsForm settings={data.settings} onSaved={(settings) => state.setData({ ...data, settings })} />
+            <SettingsForm settings={data.settings} serverCashLimitPaise={data.serverCashLimitPaise} onSaved={(settings) => state.setData({ ...data, settings })} />
             <Holidays initial={data.holidays} />
           </div>
         )}

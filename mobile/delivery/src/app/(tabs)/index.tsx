@@ -21,6 +21,7 @@ import {
   fetchOffers,
   fetchPartner,
   formatKm,
+  cashBlockText,
   formatRupees,
   setOnline,
   skipOffer,
@@ -232,12 +233,14 @@ export default function HomeScreen() {
         ) : null}
 
         {approved && partner?.cash.limitReached ? (
-          <Banner
-            tone="warning"
-            icon="briefcase"
-            title="Cash limit reached"
-            body={`You hold ${formatRupees(partner.cash.inHandPaise)} from cash orders. Hand it over to Foodos to get cash orders again. Prepaid orders still come to you.`}
-          />
+          <Pressable onPress={() => router.push('/cash')} accessibilityRole="button">
+            <Banner
+              tone="warning"
+              icon="briefcase"
+              title="Cash limit reached"
+              body={`You hold ${formatRupees(partner.cash.inHandPaise)} from cash orders, so you get ${cashBlockText(partner.cash)}. Tap to deposit now.`}
+            />
+          </Pressable>
         ) : null}
 
         <View style={styles.statsRow}>
@@ -300,13 +303,14 @@ export default function HomeScreen() {
         {approved && partner && partner.targets.length > 0 ? <Targets targets={partner.targets} /> : null}
 
         {approved && partner && partner.cash.inHandPaise > 0 && !partner.cash.limitReached ? (
-          <View style={styles.cashLine}>
+          <Pressable style={styles.cashLine} onPress={() => router.push('/cash')} accessibilityRole="button">
             <Feather name="briefcase" size={16} color={colors.warning} />
             <Text style={styles.cashLineText}>
               Cash in hand <Text style={styles.cashLineAmount}>{formatRupees(partner.cash.inHandPaise)}</Text>
               {partner.cash.limitPaise ? ` · limit ${formatRupees(partner.cash.limitPaise)}` : ''}
             </Text>
-          </View>
+            <Text style={styles.cashLineAmount}>Deposit</Text>
+          </Pressable>
         ) : null}
       </ScrollView>
     </SafeAreaView>

@@ -39,6 +39,8 @@ export type Quote = {
   coupon: { code: string | null; applied: boolean; reason: string | null; discountPaise: number }
   // Whether the restaurant delivers to the chosen address. Absent without one.
   serviceable: Serviceable | null
+  // Cash on delivery can be switched off by Foodos.
+  codAvailable: boolean
 }
 
 export async function quoteCart(
@@ -64,6 +66,7 @@ export async function quoteCart(
     total: rupees(body.totalPaise),
     coupon: body.coupon,
     serviceable: body.serviceable ?? null,
+    codAvailable: body.codAvailable !== false,
   }
 }
 

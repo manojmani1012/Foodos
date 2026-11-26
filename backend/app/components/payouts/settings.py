@@ -18,6 +18,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from ...config import get_settings
 from ...database import fetch, fetchrow, transaction
 from ...errors import bad_request
 from ..admin import audit
@@ -54,6 +55,13 @@ DEFAULTS: dict[str, Any] = {
     ],
     # The earnings day runs 05:30 to 05:29 the next morning.
     "cutoffTime": "05:30",
+    # Whether customers can choose cash on delivery (off at launch).
+    "codEnabled": True,
+    # The most cash a rider may hold ("floating cash"). None: the server's
+    # RIDER_CASH_LIMIT_PAISE. 0: no limit.
+    "riderCashLimitPaise": None,
+    # What a rider at the limit stops getting.
+    "riderCashBlock": "cash_orders",
     "minPayoutPaise": 10000,
     # Money that always stays in the bank account when paying out.
     "reservePaise": 1_000_000,
@@ -111,6 +119,9 @@ class PaymentSettings(BaseModel):
     riderDistanceBasis: Literal["trip", "drop"]
     payoutSchedule: list[ScheduleGroup] = Field(min_length=1, max_length=7)
     cutoffTime: str
+    codEnabled: bool = True
+    riderCashLimitPaise: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    riderCashBlock: Literal["cash_orders", "all_orders"] = "cash_orders"
     minPayoutPaise: int = Field(ge=0, le=10_000_000)
     reservePaise: int = Field(default=1_000_000, ge=0, le=1_000_000_000)
     refundChargedToDefault: Literal["restaurant", "rider", "foodos"]
@@ -293,7 +304,12 @@ async def holiday_days() -> set[datetime.date]:
 
 
 async def get_all() -> dict:
-    return {"settings": await load(), "holidays": await holidays()}
+    return {
+        "settings": await load(),
+        "holidays": await holidays(),
+        # What applies while riderCashLimitPaise is left empty.
+        "serverCashLimitPaise": get_settings().rider_cash_limit_paise,
+    }
 
 
 async def save(body: PaymentSettings, actor_id: uuid.UUID, ip: Optional[str]) -> dict:

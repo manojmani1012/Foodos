@@ -157,7 +157,8 @@ export type Rider = Omit<RiderRow, 'deliveries' | 'deliveriesToday' | 'carryingO
     inHandPaise: number
     limitPaise: number
     limitReached: boolean
-    deposits: { id: string; amountPaise: number; reference: string | null; recordedBy: string | null; createdAt: string }[]
+    blocks?: 'cash_orders' | 'all_orders'
+    deposits: { id: string; amountPaise: number; reference: string | null; recordedBy: string | null; online?: boolean; createdAt: string }[]
   }
   // Fake GPS seen on their phone: times (one per 10 minutes of use).
   fakeGps: { count: number; lastSeenAt: string | null }
@@ -408,6 +409,10 @@ export type PaymentSettings = {
   cutoffTime: string
   minPayoutPaise: number
   reservePaise?: number
+  codEnabled?: boolean
+  // null: the server's own limit applies. 0: no limit.
+  riderCashLimitPaise?: number | null
+  riderCashBlock?: 'cash_orders' | 'all_orders'
   refundChargedToDefault: RefundChargedTo
   payoutTime?: string
 }

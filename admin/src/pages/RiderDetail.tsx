@@ -280,7 +280,8 @@ export default function RiderDetail() {
             {rider.cash.limitReached && (
               <div className="notice notice-warning">
                 Holding {formatMoney(rider.cash.inHandPaise)} in cash, over the {formatMoney(rider.cash.limitPaise, { whole: true })} limit:
-                they get only prepaid orders until the cash is handed over and recorded below.
+                they get {rider.cash.blocks === 'all_orders' ? 'no new orders' : 'only prepaid orders'} until the cash is paid in:
+                online with Deposit now in their app, or handed over and recorded below.
               </div>
             )}
 
@@ -344,7 +345,7 @@ export default function RiderDetail() {
                         <div key={deposit.id}>
                           {formatMoney(deposit.amountPaise)}
                           <div className="sub">
-                            {[deposit.reference, deposit.recordedBy && `by ${deposit.recordedBy}`].filter(Boolean).join(' · ')}
+                            {[deposit.online && 'Paid online (Razorpay)', deposit.reference, deposit.recordedBy && `by ${deposit.recordedBy}`].filter(Boolean).join(' · ')}
                           </div>
                         </div>,
                       ])}

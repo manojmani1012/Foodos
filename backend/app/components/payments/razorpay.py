@@ -24,7 +24,7 @@ class RazorpayNotConfigured(AppError):
         super().__init__(
             503,
             "payments_unavailable",
-            "Online payment is not available right now. Please choose cash on delivery",
+            "Online payment is not available right now. Please try again later",
         )
 
 

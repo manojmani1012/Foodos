@@ -162,7 +162,7 @@ async def offer_next(delivery_id: uuid.UUID) -> Optional[uuid.UUID]:
             EXPIRED_PAUSE_SECONDS,
             delivery["is_test"],
             cash.skip_limit(delivery["payment_method"], delivery["payment_status"]),
-            settings.rider_cash_limit_paise,
+            cash.limit_paise(),
         )
 
         if rider is None:

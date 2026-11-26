@@ -15,6 +15,7 @@ from ..components.orders import service as order_service
 from ..components.orders.pricing import quote_cart, quote_serviceability
 from ..components.orders import profile as profile_service
 from ..components.payments import service as payment_service
+from ..components.payouts import settings as payment_settings
 from ..components.wallet import service as wallet_service
 from ..components.orders.schemas import (
     AddressBody,
@@ -181,6 +182,8 @@ async def quote_cart_endpoint(
     """
     quote = await quote_cart(body.items, body.couponCode, user.id if user else None, body.tipPaise)
     result = {"ok": True, **quote.to_dict()}
+    # Checkout offers cash only while it is switched on.
+    result["codAvailable"] = payment_settings.current()["codEnabled"]
 
     # Whether the restaurant delivers to the chosen address, so the cart can
     # say so before checkout rather than at it.

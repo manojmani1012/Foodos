@@ -228,7 +228,7 @@ async def confirm_topup(
         payment = await connection.fetchrow(
             """
             select id, user_id, amount_paise from payments
-            where provider_order_id = $1 and user_id = $2 and order_id is null
+            where provider_order_id = $1 and user_id = $2 and order_id is null and purpose is null
             for update
             """,
             razorpay_order_id,

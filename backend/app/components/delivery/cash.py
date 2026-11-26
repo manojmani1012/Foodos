@@ -6,9 +6,11 @@ over (a deposit an admin records) or settled in a payout, which takes the cash
 off the rider's pay. A paid payout settles the cash rows in it, and, as with
 the payouts recorded by hand before automatic payouts, every day it covers.
 
-Once a rider holds `rider_cash_limit_paise`, dispatch offers them only prepaid
-orders until they deposit the cash, as Swiggy and Zomato do. A rider never
-loses an order already in their hands because of it.
+Once a rider holds the cash limit (the payment settings, else the server's
+`rider_cash_limit_paise`), dispatch offers them only prepaid orders, or no
+orders at all if the settings say so, until they deposit the cash: to staff,
+or online with "Deposit now" (deposits.py). A rider never loses an order
+already in their hands because of it.
 """
 
 import uuid
@@ -16,6 +18,7 @@ from typing import Optional
 
 from ...config import get_settings
 from ...database import fetch, fetchval
+from ..payouts import settings as payment_settings
 
 
 def _unpaid(partner: str, day: str) -> str:
@@ -58,14 +61,23 @@ async def in_hand(partner_id: uuid.UUID) -> int:
     return int(await fetchval(f"select {in_hand_sql('$1::uuid')}", partner_id))
 
 
+def limit_paise() -> int:
+    """The most cash a rider may hold; 0 for no limit."""
+    chosen = payment_settings.current()["riderCashLimitPaise"]
+
+    return get_settings().rider_cash_limit_paise if chosen is None else chosen
+
+
 def summary_of(in_hand_paise: int) -> dict:
-    limit = get_settings().rider_cash_limit_paise
+    limit = limit_paise()
 
     return {
         "inHandPaise": in_hand_paise,
         # 0 when there is no limit.
         "limitPaise": limit,
         "limitReached": bool(limit) and in_hand_paise >= limit,
+        # What stops at the limit: 'cash_orders' or 'all_orders'.
+        "blocks": payment_settings.current()["riderCashBlock"],
     }
 
 
@@ -76,7 +88,7 @@ async def summary(partner_id: uuid.UUID) -> dict:
 async def deposits(partner_id: uuid.UUID, limit: int = 10) -> list[dict]:
     rows = await fetch(
         """
-        select c.id, c.amount_paise, c.reference, c.created_at, u.full_name as recorded_by
+        select c.id, c.amount_paise, c.reference, c.created_at, c.payment_id, u.full_name as recorded_by
         from rider_cash_deposits c
         left join users u on u.id = c.recorded_by
         where c.partner_id = $1
@@ -93,6 +105,7 @@ async def deposits(partner_id: uuid.UUID, limit: int = 10) -> list[dict]:
             "amountPaise": row["amount_paise"],
             "reference": row["reference"],
             "recordedBy": row["recorded_by"],
+            "online": row["payment_id"] is not None,
             "createdAt": row["created_at"].isoformat(),
         }
         for row in rows
@@ -100,8 +113,13 @@ async def deposits(partner_id: uuid.UUID, limit: int = 10) -> list[dict]:
 
 
 def skip_limit(payment_method: Optional[str], payment_status: Optional[str]) -> bool:
-    """Prepaid orders put no cash in the rider's pocket, so the limit does not
-    apply to them; nor does it when no limit is set."""
-    cash_order = payment_method == "cod" and payment_status != "paid"
+    """Whether the limit is ignored for this order: always when none is set.
+    Prepaid orders put no cash in the rider's pocket, so unless the settings
+    block all orders, the limit does not apply to them either."""
+    if not limit_paise():
+        return True
 
-    return not cash_order or not get_settings().rider_cash_limit_paise
+    if payment_settings.current()["riderCashBlock"] == "all_orders":
+        return False
+
+    return not (payment_method == "cod" and payment_status != "paid")
