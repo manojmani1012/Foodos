@@ -25,7 +25,7 @@ MAX_REPORT_DAYS = 366
 
 DELIVERED_ON = "(coalesce(o.delivered_at, o.placed_at) at time zone 'Asia/Kolkata')::date"
 
-STATUSES = ("scheduled", "on_hold", "failed", "paid", "cancelled")
+STATUSES = ("scheduled", "processing", "on_hold", "failed", "paid", "cancelled")
 
 
 async def period(date_from: Optional[datetime.date], date_to: Optional[datetime.date]) -> tuple[datetime.date, datetime.date]:

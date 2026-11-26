@@ -330,6 +330,16 @@ class HolidayBody(BaseModel):
     name: str = Field(min_length=2, max_length=80)
 
 
+class BankBalanceBody(BaseModel):
+    balancePaise: int = Field(ge=0, le=100_000_000_000)
+
+
+class BankResultBody(BaseModel):
+    csv: str = Field(min_length=1, max_length=500_000)
+    # False previews what the file would do; True does it.
+    apply: bool = False
+
+
 class AdjustmentBody(BaseModel):
     partyType: Literal["restaurant", "delivery_partner"]
     partyId: str = Field(min_length=1, max_length=64)

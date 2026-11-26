@@ -407,11 +407,57 @@ export type PaymentSettings = {
   payoutSchedule: { days: number[]; payWeekday: number }[]
   cutoffTime: string
   minPayoutPaise: number
+  reservePaise?: number
   refundChargedToDefault: RefundChargedTo
   payoutTime?: string
 }
 
 export type Holiday = { day: string; name: string }
+
+export type BankFunds = {
+  balancePaise: number | null
+  balanceAt: string | null
+  reservePaise: number
+  waitingOnBankPaise: number
+  paidSinceBalancePaise: number
+  availablePaise: number | null
+  due: CountAndAmount
+  ready: CountAndAmount
+  upi: CountAndAmount
+  blocked: CountAndAmount
+  waitingForFunds: CountAndAmount
+  shortfallPaise: number
+  oldestWaiting: { payoutId: string; partyName: string | null; netPaise: number; periodStart: string } | null
+}
+
+export type BankFile = {
+  id: string
+  number: number
+  createdAt: string
+  createdBy: string | null
+  paymentCount: number
+  totalPaise: number
+  cancelledAt: string | null
+  waiting: number
+  paid: number
+  failed: number
+}
+
+export type BankResult = {
+  applied: boolean
+  rows: {
+    row: number
+    reference: string
+    utr: string | null
+    reason: string | null
+    payoutId: string | null
+    partyName: string | null
+    amountPaise: number | null
+    outcome: 'paid' | 'failed' | 'done' | 'problem'
+    message: string | null
+  }[]
+  summary: { paid: number; failed: number; done: number; problem: number }
+}
 
 export type RefundChargedTo = 'restaurant' | 'rider' | 'foodos'
 

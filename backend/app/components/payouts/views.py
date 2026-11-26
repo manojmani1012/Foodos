@@ -8,7 +8,7 @@ from ...database import fetchrow
 PAYOUT_SELECT = """
     select p.id, p.party_type, p.status, p.scheduled_for, p.period_start, p.period_end, p.gross_paise,
            p.commission_paise, p.adjustments_paise, p.net_paise, p.payout_reference, p.paid_at,
-           p.hold_reason, p.failure_reason, p.created_at, p.batch_id,
+           p.hold_reason, p.failure_reason, p.created_at, p.batch_id, p.bank_file_id,
            coalesce(p.restaurant_id, p.partner_id) as party_id,
            coalesce(r.name, pu.full_name) as party_name,
            coalesce(ou.full_name, pu.full_name) as contact_name,

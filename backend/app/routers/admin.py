@@ -12,7 +12,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 
-from ..components.payouts import finance, ledger, schedule
+from ..components.payouts import bank, finance, ledger, schedule
 from ..components.payouts import settings as payment_settings
 
 from ..components.admin import (
@@ -37,6 +37,8 @@ from ..components.admin.schemas import (
     CreateRestaurantBody,
     CreateTargetBody,
     AdjustmentBody,
+    BankBalanceBody,
+    BankResultBody,
     HolidayBody,
     IncludeExcludedBody,
     PartialRefundBody,
@@ -424,7 +426,7 @@ async def finance_overview(
 
 @router.get("/finance/payouts")
 async def finance_payouts(
-    status: Optional[Literal["scheduled", "on_hold", "failed", "paid", "cancelled", "all"]] = None,
+    status: Optional[Literal["scheduled", "processing", "on_hold", "failed", "paid", "cancelled", "all"]] = None,
     party: Optional[Literal["restaurant", "delivery_partner"]] = None,
     search: Optional[str] = Query(default=None, max_length=80),
     limit: int = Page,
@@ -497,6 +499,47 @@ async def release_batch(batch_id: str, actor: Actor = Depends(acting_admin)):
 @router.post("/finance/batches/{batch_id}/reschedule")
 async def reschedule_batch(batch_id: str, body: PayoutRescheduleBody, actor: Actor = Depends(acting_admin)):
     return {"ok": True, **await schedule.act_on_batch(batch_id, "reschedule", actor.id, actor.ip, date=body.date)}
+
+
+@router.get("/finance/funds")
+async def finance_funds(user: CurrentUser = Depends(admin_only)):
+    return {"ok": True, "funds": await bank.funds()}
+
+
+@router.put("/finance/bank-balance")
+async def save_bank_balance(body: BankBalanceBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "funds": await bank.save_balance(body.balancePaise, actor.id, actor.ip)}
+
+
+@router.get("/finance/bank-files")
+async def list_bank_files(user: CurrentUser = Depends(admin_only)):
+    return {"ok": True, **await bank.list_files()}
+
+
+@router.post("/finance/bank-files", status_code=201)
+async def create_bank_file(actor: Actor = Depends(acting_admin)):
+    return {"ok": True, **await bank.create_file(actor.id, actor.ip)}
+
+
+@router.get("/finance/bank-files/{file_id}/download")
+async def download_bank_file(file_id: str, actor: Actor = Depends(acting_admin)):
+    filename, text = await bank.file_csv(file_id, actor.id, actor.ip)
+
+    return Response(
+        content=text.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "private, no-store"},
+    )
+
+
+@router.post("/finance/bank-files/{file_id}/cancel")
+async def cancel_bank_file(file_id: str, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, **await bank.cancel_file(file_id, actor.id, actor.ip)}
+
+
+@router.post("/finance/bank-results")
+async def upload_bank_result(body: BankResultBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, **await bank.apply_result(body.csv, body.apply, actor.id, actor.ip)}
 
 
 @router.post("/finance/run")

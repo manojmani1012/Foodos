@@ -1,9 +1,10 @@
 import { Link } from 'react-router-dom'
 import BarChart from '../components/BarChart'
+import { ShortfallNotice } from '../components/BankPayments'
 import { Card, Empty, Loadable, PageHeader, Stat } from '../components/ui'
 import { api } from '../lib/api'
 import { formatMoney, formatWait, ORDER_STATUS } from '../lib/format'
-import type { Dashboard as DashboardData, StuckOrder } from '../lib/types'
+import type { BankFunds, Dashboard as DashboardData, StuckOrder } from '../lib/types'
 import { useLoad } from '../lib/useLoad'
 
 function StuckList({ orders, empty, money }: { orders: StuckOrder[]; empty: string; money?: boolean }) {
@@ -32,9 +33,17 @@ function StuckList({ orders, empty, money }: { orders: StuckOrder[]; empty: stri
 export default function Dashboard() {
   const state = useLoad(() => api<DashboardData>('/api/v1/admin/dashboard'), 'dashboard', 30_000)
 
+  // An extra: if it cannot load, the dashboard still does.
+  const funds = useLoad(() => api<{ funds: BankFunds }>('/api/v1/admin/finance/funds'), 'dashboard-funds', 60_000)
+
   return (
     <>
       <PageHeader title="Dashboard" subtitle="Today in India time. Refreshes every 30 seconds." />
+      {funds.data && funds.data.funds.shortfallPaise > 0 && (
+        <Link to="/payouts">
+          <ShortfallNotice funds={funds.data.funds} />
+        </Link>
+      )}
       <Loadable state={state}>
         {(data) => {
           const attention = data.attention

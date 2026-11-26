@@ -314,8 +314,9 @@ async def act(
                 f"{ACTION_PAST[action]}",
             )
 
-        if action == "paid":
-            # Money only goes to an account staff have checked.
+        if action == "paid" and payout["status"] != "processing":
+            # Money only goes to an account staff have checked. One waiting on a
+            # bank file was checked when the file was made, and has been sent.
             why = blocker(await connection.fetchrow(f"{PAYOUT_SELECT} where p.id = $1", identifier))
 
             if why is not None:
@@ -345,6 +346,13 @@ async def act(
                 date,
             )
         elif action == "paid":
+            if await connection.fetchval(
+                "select 1 from payouts where lower(payout_reference) = lower($1) and id <> $2 and bank_file_id is not null",
+                reference,
+                identifier,
+            ):
+                raise conflict("reference_used", "That bank reference is already used by another payout")
+
             await connection.execute(
                 """
                 update payouts

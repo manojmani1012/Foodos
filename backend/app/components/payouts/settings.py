@@ -55,6 +55,8 @@ DEFAULTS: dict[str, Any] = {
     # The earnings day runs 05:30 to 05:29 the next morning.
     "cutoffTime": "05:30",
     "minPayoutPaise": 10000,
+    # Money that always stays in the bank account when paying out.
+    "reservePaise": 1_000_000,
     "refundChargedToDefault": "restaurant",
     # When staff pay on a payout day. Shown in the apps; nothing runs at it.
     "payoutTime": "10:00",
@@ -110,6 +112,7 @@ class PaymentSettings(BaseModel):
     payoutSchedule: list[ScheduleGroup] = Field(min_length=1, max_length=7)
     cutoffTime: str
     minPayoutPaise: int = Field(ge=0, le=10_000_000)
+    reservePaise: int = Field(default=1_000_000, ge=0, le=1_000_000_000)
     refundChargedToDefault: Literal["restaurant", "rider", "foodos"]
     payoutTime: str
 

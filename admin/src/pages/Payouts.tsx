@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import BankPayments from '../components/BankPayments'
 import {
   Badge,
   Card,
@@ -37,7 +38,7 @@ import { useFilters } from '../lib/useParams'
 
 const LIMIT = 50
 
-type Status = 'scheduled' | 'on_hold' | 'failed' | 'paid' | 'cancelled' | 'all'
+type Status = 'scheduled' | 'processing' | 'on_hold' | 'failed' | 'paid' | 'cancelled' | 'all'
 
 const PRESETS = [
   { label: 'Last 7 days', range: () => ({ from: indiaToday(-7), to: indiaToday() }) },
@@ -282,7 +283,7 @@ function Batches({ refreshKey, onChanged }: { refreshKey: number; onChanged: () 
     <Card title="Batches">
       <p className="muted small">
         A batch is every payout that shares a pay date. Hold, release or move the whole batch at once. Nothing is sent
-        automatically: staff send each payout from the bank and mark it paid.
+        automatically: pay with a bank file above, or send each payout and mark it paid.
       </p>
       <Loadable state={state}>
         {(data) =>
@@ -760,7 +761,7 @@ export default function Payouts() {
     <>
       <PageHeader
         title="Payouts"
-        subtitle="Money collected, what Foodos owes restaurants and riders, and their payouts. Staff send each payout from the bank and mark it paid here with the reference."
+        subtitle="Money collected, what Foodos owes restaurants and riders, and their payouts. Pay through a bank file, or send each payout yourself and mark it paid with the reference."
         actions={
           <>
             <Link className="btn" to="/settings">
@@ -795,6 +796,8 @@ export default function Payouts() {
         <Loadable state={overview}>{(data) => <Overview data={data} />}</Loadable>
       </Card>
 
+      <BankPayments refreshKey={refreshKey} onChanged={() => { overview.reload(); list.reload() }} />
+
       <Batches refreshKey={refreshKey} onChanged={() => { overview.reload(); list.reload() }} />
 
       <h2 className="section-title">Payouts</h2>
@@ -804,6 +807,7 @@ export default function Payouts() {
         onChange={(status) => setFilters({ status })}
         options={[
           { value: 'scheduled', label: counts?.dueToday ? `Scheduled (${counts.dueToday} due today)` : 'Scheduled', count: counts?.scheduled },
+          { value: 'processing', label: 'Processing', count: counts?.processing },
           { value: 'on_hold', label: 'On hold', count: counts?.on_hold, alert: true },
           { value: 'failed', label: 'Failed', count: counts?.failed, alert: true },
           { value: 'paid', label: 'Paid', count: counts?.paid },

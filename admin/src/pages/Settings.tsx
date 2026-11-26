@@ -23,6 +23,7 @@ type Form = {
   riderDistanceBasis: 'trip' | 'drop'
   cutoffTime: string
   minPayout: string
+  reserve: string
   refundChargedToDefault: RefundChargedTo
   payoutSchedule: Group[]
 }
@@ -48,6 +49,7 @@ function toForm(settings: PaymentSettings): Form {
     riderDistanceBasis: settings.riderDistanceBasis,
     cutoffTime: settings.cutoffTime,
     minPayout: rupees(settings.minPayoutPaise),
+    reserve: rupees(settings.reservePaise ?? 1_000_000),
     refundChargedToDefault: settings.refundChargedToDefault,
     payoutSchedule: settings.payoutSchedule.map((group) => ({ days: [...group.days].sort(), payWeekday: group.payWeekday })),
   }
@@ -271,6 +273,7 @@ function SettingsForm({ settings, onSaved }: { settings: PaymentSettings; onSave
       riderDistanceBasis: form.riderDistanceBasis,
       cutoffTime: form.cutoffTime,
       minPayoutPaise: toPaise(form.minPayout),
+      reservePaise: toPaise(form.reserve),
       refundChargedToDefault: form.refundChargedToDefault,
       payoutSchedule: form.payoutSchedule.map((group) => ({ days: [...group.days].sort(), payWeekday: group.payWeekday })),
     }
@@ -439,6 +442,13 @@ function SettingsForm({ settings, onSaved }: { settings: PaymentSettings; onSave
             error={fieldErrors.minPayoutPaise}
           >
             {(id) => <input id={id} className="input" inputMode="decimal" value={form.minPayout} onChange={(e) => set('minPayout', e.target.value)} />}
+          </Field>
+          <Field
+            label="Always keep in the bank (₹)"
+            hint="Bank files never use this part of the balance."
+            error={fieldErrors.reservePaise}
+          >
+            {(id) => <input id={id} className="input" inputMode="decimal" value={form.reserve} onChange={(e) => set('reserve', e.target.value)} />}
           </Field>
           <Field
             label="Partial refunds are charged to"
