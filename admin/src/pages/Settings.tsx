@@ -30,6 +30,9 @@ type Form = {
   riderCashBlock: 'cash_orders' | 'all_orders'
   refundChargedToDefault: RefundChargedTo
   refundPhotoRequired: boolean
+  needsShifts: boolean
+  shifts: { name: string; start: string; end: string; hours: string }[]
+  maxRejections: string
   payoutSchedule: Group[]
 }
 
@@ -60,6 +63,14 @@ function toForm(settings: PaymentSettings): Form {
     riderCashBlock: settings.riderCashBlock ?? 'cash_orders',
     refundChargedToDefault: settings.refundChargedToDefault,
     refundPhotoRequired: settings.refundPhotoRequired ?? true,
+    needsShifts: settings.riderIncentiveNeedsShifts ?? false,
+    shifts: (settings.riderShifts ?? []).map((shift) => ({
+      name: shift.name,
+      start: shift.start,
+      end: shift.end,
+      hours: String(shift.minMinutes / 60),
+    })),
+    maxRejections: String(settings.riderMaxRejections ?? 1),
     payoutSchedule: settings.payoutSchedule.map((group) => ({ days: [...group.days].sort(), payWeekday: group.payWeekday })),
   }
 }
@@ -296,6 +307,14 @@ function SettingsForm({
       riderCashBlock: form.riderCashBlock,
       refundChargedToDefault: form.refundChargedToDefault,
       refundPhotoRequired: form.refundPhotoRequired,
+      riderIncentiveNeedsShifts: form.needsShifts,
+      riderShifts: form.shifts.map((shift) => ({
+        name: shift.name.trim(),
+        start: shift.start,
+        end: shift.end,
+        minMinutes: Math.round(Number(shift.hours) * 60),
+      })),
+      riderMaxRejections: number(form.maxRejections),
       payoutSchedule: form.payoutSchedule.map((group) => ({ days: [...group.days].sort(), payWeekday: group.payWeekday })),
     }
 
@@ -438,6 +457,39 @@ function SettingsForm({
           {formatMoney(toPaise(form.riderBase || '0') + Math.round((2 * toPaise(form.riderPerKm || '0')) / 100) * 100)} +{' '}
           {formatMoney(toPaise(form.riderOrderIncentive || '0'))} incentive, plus any tip. Applies to trips accepted after you save.
         </p>
+      </Card>
+
+      <Card title="Shift rule for the delivery incentive">
+        <label className="check-row">
+          <input type="checkbox" checked={form.needsShifts} onChange={(e) => set('needsShifts', e.target.checked)} />
+          <span>Pay the per-order incentive only to riders who meet the shift hours</span>
+        </label>
+        <p className="muted small">
+          Off: the incentive above is paid on every delivered order. On: it is paid after the day ends, for all of that day's
+          orders, only if the rider was online long enough in <strong>every</strong> shift. Confirm with the client first.
+        </p>
+        {form.shifts.map((shift, index) => (
+          <div key={index} className="toolbar">
+            <strong>{shift.name}</strong>
+            <label className="inline-field">
+              from
+              <input className="input" type="time" value={shift.start} onChange={(e) => set('shifts', form.shifts.map((s, i) => (i === index ? { ...s, start: e.target.value } : s)))} />
+            </label>
+            <label className="inline-field">
+              to
+              <input className="input" type="time" value={shift.end} onChange={(e) => set('shifts', form.shifts.map((s, i) => (i === index ? { ...s, end: e.target.value } : s)))} />
+            </label>
+            <label className="inline-field">
+              hours online needed
+              <input className="input" type="number" min={0.25} max={24} step={0.25} value={shift.hours} onChange={(e) => set('shifts', form.shifts.map((s, i) => (i === index ? { ...s, hours: e.target.value } : s)))} />
+            </label>
+          </div>
+        ))}
+        <div className="form-grid two">
+          <Field label="Orders a rider may turn down in a day" error={fieldErrors.riderMaxRejections}>
+            {(id) => <input id={id} className="input" type="number" min={0} step={1} value={form.maxRejections} onChange={(e) => set('maxRejections', e.target.value)} />}
+          </Field>
+        </div>
       </Card>
 
       <Card title="Cash on delivery and floating cash">

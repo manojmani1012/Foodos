@@ -57,7 +57,11 @@ def rider_pay(total_km: Optional[float], drop_km: Optional[float] = None) -> int
 def order_incentive(is_test: bool) -> int:
     """The flat per-order incentive a delivered trip earns. Test orders earn
     nothing, so the offer screen does not promise it either."""
-    return 0 if is_test else int(payment_settings.current()["riderOrderIncentivePaise"])
+    # Under the shift rule it is not promised per trip: it depends on the day.
+    if is_test or payment_settings.current()["riderIncentiveNeedsShifts"]:
+        return 0
+
+    return int(payment_settings.current()["riderOrderIncentivePaise"])
 
 
 def trip(rider_lat: Any, rider_lng: Any, restaurant_lat: Any, restaurant_lng: Any, address: dict):

@@ -31,6 +31,7 @@ LIVE = "r.is_active and r.starts_at <= now() and (r.ends_at is null or r.ends_at
 
 COLUMNS = f"""
     r.id, r.name, r.target_trips, r.bonus_paise, r.starts_at, r.ends_at, ({LIVE}) as live,
+    r.day_type, r.festival_from, r.festival_to,
     (select count(*) from incentive_awards a where a.rule_id = r.id and a.award_date = current_date)::int
       as reached_today,
     (select count(*) from incentive_awards a where a.rule_id = r.id)::int as reached_total,
@@ -45,6 +46,9 @@ def _to_dict(row: Any) -> dict:
         "targetTrips": row["target_trips"],
         "bonusPaise": row["bonus_paise"],
         "live": row["live"],
+        "dayType": row["day_type"],
+        "festivalFrom": row["festival_from"].isoformat() if row["festival_from"] else None,
+        "festivalTo": row["festival_to"].isoformat() if row["festival_to"] else None,
         "startsAt": row["starts_at"].isoformat(),
         "endsAt": row["ends_at"].isoformat() if row["ends_at"] else None,
         "reachedToday": row["reached_today"],
@@ -81,13 +85,16 @@ async def create_target(body: Any, actor_id: uuid.UUID, ip: Optional[str]) -> di
     async with transaction() as connection:
         identifier = await connection.fetchval(
             """
-            insert into incentive_rules (name, target_trips, bonus_paise)
-            values ($1, $2, $3)
+            insert into incentive_rules (name, target_trips, bonus_paise, day_type, festival_from, festival_to)
+            values ($1, $2, $3, $4, $5, $6)
             returning id
             """,
             name,
             body.targetTrips,
             body.bonusPaise,
+            body.dayType,
+            body.festivalFrom,
+            body.festivalTo,
         )
 
         await audit.record(
@@ -96,7 +103,7 @@ async def create_target(body: Any, actor_id: uuid.UUID, ip: Optional[str]) -> di
             "Riders",
             "incentive_rule",
             identifier,
-            {"name": name, "targetTrips": body.targetTrips, "bonusPaise": body.bonusPaise},
+            {"name": name, "targetTrips": body.targetTrips, "bonusPaise": body.bonusPaise, "dayType": body.dayType},
             ip,
             connection,
         )

@@ -176,6 +176,8 @@ export type Order = {
   deliveryPreferences: DeliveryPreference[]
   // The customer's rating of the delivery, once given.
   riderReview: { rating: number; comment: string | null } | null
+  // The rider said thanks for the tip.
+  tipThanked: boolean
 }
 
 export type DeliveryPreference = 'leave_at_door' | 'no_bell' | 'no_call' | 'pet_at_home'
@@ -241,6 +243,7 @@ export function mapOrder(api: any): Order {
     noCutlery: !!api.noCutlery,
     deliveryPreferences: api.deliveryPreferences ?? [],
     riderReview: api.riderReview ?? null,
+    tipThanked: !!api.tipThanked,
   }
 }
 

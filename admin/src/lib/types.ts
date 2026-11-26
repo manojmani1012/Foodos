@@ -165,6 +165,7 @@ export type Rider = Omit<RiderRow, 'deliveries' | 'deliveriesToday' | 'carryingO
   fakeGps: { count: number; lastSeenAt: string | null }
   documents: RiderDocument[]
   // Where Foodos sends the rider's money; bank or UPI. Full account number.
+  loginHours?: LoginHours
   payoutAccount?: PayoutAccount | null
   recentDeliveries: {
     id: string
@@ -418,6 +419,9 @@ export type PaymentSettings = {
   riderCashBlock?: 'cash_orders' | 'all_orders'
   refundChargedToDefault: RefundChargedTo
   refundPhotoRequired?: boolean
+  riderIncentiveNeedsShifts?: boolean
+  riderShifts?: RiderShift[]
+  riderMaxRejections?: number
   payoutTime?: string
 }
 
@@ -604,6 +608,28 @@ export type DailyTarget = {
   reachedToday: number
   reachedTotal: number
   paidTotalPaise: number
+  dayType?: DayType
+  festivalFrom?: string | null
+  festivalTo?: string | null
+}
+
+export type DayType = 'every_day' | 'weekday' | 'weekend' | 'festival'
+
+export type RiderShift = { name: string; start: string; end: string; minMinutes: number }
+
+export type LoginHours = {
+  ruleOn: boolean
+  incentivePerOrderPaise: number
+  today: {
+    date: string
+    onlineMinutes: number
+    shifts: (RiderShift & { doneMinutes: number; met: boolean })[]
+    rejections: number
+    maxRejections: number
+    eligible: boolean
+  }
+  days: { date: string; onlineMinutes: number }[]
+  results: { date: string; eligible: boolean; trips: number; amountPaise: number }[]
 }
 
 export type SupportTicketRow = {

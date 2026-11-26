@@ -23,6 +23,7 @@ import {
   formatKm,
   cashBlockText,
   formatRupees,
+  thankForTip,
   setOnline,
   skipOffer,
   type Delivery,
@@ -243,6 +244,10 @@ export default function HomeScreen() {
           </Pressable>
         ) : null}
 
+        {approved && partner?.tipToThank ? (
+          <TipBanner key={partner.tipToThank.deliveryId} tip={partner.tipToThank} />
+        ) : null}
+
         <View style={styles.statsRow}>
           <Stat label="Today's earnings" value={formatRupees(partner?.today.earningsPaise ?? 0)} />
           <Stat label="Deliveries today" value={String(partner?.today.deliveries ?? 0)} />
@@ -301,6 +306,14 @@ export default function HomeScreen() {
         )}
 
         {approved && partner && partner.targets.length > 0 ? <Targets targets={partner.targets} /> : null}
+
+        {approved ? (
+          <Pressable style={styles.offersLink} onPress={() => router.push('/offers')} accessibilityRole="button">
+            <Feather name="gift" size={16} color={colors.brand} />
+            <Text style={styles.offersLinkText}>Extra earning offers and your shift hours</Text>
+            <Feather name="chevron-right" size={16} color={colors.brand} />
+          </Pressable>
+        ) : null}
 
         {approved && partner && partner.cash.inHandPaise > 0 && !partner.cash.limitReached ? (
           <Pressable style={styles.cashLine} onPress={() => router.push('/cash')} accessibilityRole="button">
@@ -409,10 +422,46 @@ function Leg({ icon, title, detail }: { icon: keyof typeof Feather.glyphMap; tit
 }
 
 // "Complete 15 trips, earn ₹250 extra": each target with today's progress.
+// "You got a tip": all of it is the rider's, and they can thank the customer.
+function TipBanner({ tip }: { tip: NonNullable<Partner['tipToThank']> }) {
+  const [state, setState] = useState<'ask' | 'sending' | 'sent' | 'failed'>('ask')
+
+  async function thank() {
+    setState('sending')
+
+    try {
+      await thankForTip(tip.deliveryId)
+      setState('sent')
+    } catch {
+      setState('failed')
+    }
+  }
+
+  return (
+    <View style={styles.tip}>
+      <Feather name="heart" size={18} color={colors.brandInk} />
+      <View style={styles.flex}>
+        <Text style={styles.tipTitle}>You got a {formatRupees(tip.tipPaise)} tip</Text>
+        <Text style={styles.tipText}>
+          {tip.customerName ? `From ${tip.customerName}, ` : ''}order #{tip.orderNumber}. All of it is yours.
+          {state === 'failed' ? ' Could not send your thanks. Try again.' : ''}
+        </Text>
+      </View>
+      {state === 'sent' ? (
+        <Text style={styles.tipTitle}>Thanks sent</Text>
+      ) : (
+        <Pressable style={styles.tipButton} onPress={thank} disabled={state === 'sending'} accessibilityRole="button">
+          <Text style={styles.tipButtonText}>{state === 'sending' ? 'Sending…' : 'Say thanks'}</Text>
+        </Pressable>
+      )}
+    </View>
+  )
+}
+
 function Targets({ targets }: { targets: Target[] }) {
   return (
     <View style={styles.targets}>
-      <Text style={styles.sectionTitle}>Today's targets</Text>
+      <Text style={styles.sectionTitle}>Today's offers</Text>
       {targets.map(target => {
         const progress = Math.min(1, target.tripsDone / target.targetTrips)
         const left = target.targetTrips - target.tripsDone
@@ -634,6 +683,27 @@ const styles = StyleSheet.create({
     borderTopColor: colors.line,
   },
   offerMetaText: { ...type.caption, color: colors.body, flex: 1 },
+  tip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    padding: space.md,
+    borderRadius: radius.lg,
+    backgroundColor: colors.brandSoft,
+  },
+  tipTitle: { ...type.smallStrong, color: colors.brandInk },
+  tipText: { ...type.caption, color: colors.brandInk },
+  tipButton: { paddingVertical: space.sm, paddingHorizontal: space.md, borderRadius: radius.pill, backgroundColor: colors.brand },
+  tipButtonText: { ...type.smallStrong, color: colors.surface },
+  offersLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    padding: space.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+  },
+  offersLinkText: { ...type.smallStrong, color: colors.brand, flex: 1 },
   cashPill: {
     paddingHorizontal: space.sm,
     paddingVertical: 4,

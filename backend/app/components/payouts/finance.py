@@ -329,6 +329,10 @@ async def run_now() -> int:
     """The sweeper, then the scheduler: what the background loop does."""
     await payment_settings.load()
     await ledger.sweep()
+    # Imported here: the shift rule writes ledger rows, so it imports this package.
+    from ..delivery import shifts
+
+    await shifts.settle()
     created = await schedule.run()
     await schedule.send_reminders()
 

@@ -289,6 +289,22 @@ async def delivered(order_id: uuid.UUID) -> None:
 
 
 @_quietly
+async def tip_thanks(order_id: uuid.UUID, rider_name: Optional[str], tip_paise: int) -> None:
+    order = await _order(order_id)
+
+    if order is None:
+        return
+
+    await push.notify(
+        [order["customer_id"]],
+        "customer",
+        "Thanks for the tip",
+        f"{_first_name(rider_name) or 'Your delivery partner'} says thank you for the {_rupees(tip_paise)} tip.",
+        _order_link(order),
+    )
+
+
+@_quietly
 async def refund_processed(order_id: uuid.UUID) -> None:
     order = await _order(order_id)
     refund = await refunds.refund_for_order(order_id)

@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from ..components.auth.dependencies import CurrentUser, require_role
 from ..components.delivery import deposits as cash_deposits
-from ..components.delivery import documents, service
+from ..components.delivery import documents, service, shifts, targets
 from ..components.delivery.schemas import (
     LocationBody,
     OnlineBody,
@@ -160,6 +160,30 @@ async def confirm_deposit(body: DepositConfirmBody, user: CurrentUser = Depends(
     )
 
     return {"ok": True, **result}
+
+
+@router.get("/earnings/weekly")
+async def weekly_earnings(weeks: int = Query(default=8, ge=1, le=26), user: CurrentUser = Depends(rider_only)):
+    return {"ok": True, **await service.weekly_earnings(user.id, weeks)}
+
+
+# Login hours, and today's standing for the shift incentive.
+@router.get("/shifts")
+async def my_shifts(user: CurrentUser = Depends(rider_only)):
+    return {"ok": True, **await shifts.summary(user.id)}
+
+
+# Extra Earning Offers: trip targets for today and for other days.
+@router.get("/offers")
+async def earning_offers(user: CurrentUser = Depends(rider_only)):
+    return {"ok": True, **await targets.offers(user.id)}
+
+
+@router.post("/deliveries/{delivery_id}/thank")
+async def thank_for_tip(delivery_id: str, user: CurrentUser = Depends(rider_only)):
+    await service.thank_for_tip(user.id, delivery_id)
+
+    return {"ok": True}
 
 
 @router.get("/tds")

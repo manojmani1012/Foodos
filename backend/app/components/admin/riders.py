@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from ...database import fetch, fetchrow, fetchval, transaction
 from ...errors import bad_request, conflict, not_found
-from ..delivery import cash
+from ..delivery import cash, shifts
 from ..delivery.documents import REQUIRED as REQUIRED_DOCUMENTS
 from ..delivery.documents import as_view as documents_view
 from ..delivery.documents import check_type
@@ -252,6 +252,8 @@ async def get_rider(rider_id: str) -> dict:
         # All cash not yet handed over or settled in a payout, the limit, and
         # the deposits recorded so far.
         "cash": {**await cash.summary(identifier), "deposits": await cash.deposits(identifier)},
+        # Hours online, and where they stand against the shift rule today.
+        "loginHours": await shifts.summary(identifier),
         # Fake GPS seen on their phone: times (one per 10 minutes of use) and when last.
         "fakeGps": {
             "count": row["mock_location_count"],

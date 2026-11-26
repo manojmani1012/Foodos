@@ -1,3 +1,4 @@
+import { LoginHours } from '../components/LoginHours'
 import { useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import MapPicker from '../components/Map'
@@ -321,6 +322,8 @@ export default function RiderDetail() {
                 </Card>
 
                 <RiderDocuments rider={rider} onChange={state.setData} />
+
+                {rider.loginHours && <LoginHours hours={rider.loginHours} />}
 
                 <PayoutAccountCard kind="rider" partyId={rider.id} account={rider.payoutAccount} onChanged={state.setData} />
 

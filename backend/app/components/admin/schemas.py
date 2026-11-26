@@ -424,12 +424,36 @@ class CashDepositBody(BaseModel):
 
 
 class CreateTargetBody(BaseModel):
-    """A daily target: "Complete 15 trips, earn ₹250 extra". It runs every day
-    until it is stopped."""
+    """An extra earning offer: "Complete 15 trips, earn ₹250 extra". It runs on
+    the days it is for, every such day, until it is stopped."""
 
     targetTrips: int = Field(ge=1, le=60)
     bonusPaise: int = Field(ge=100, le=1_000_000)
     name: Optional[str] = Field(default=None, max_length=60)
+    dayType: Literal["every_day", "weekday", "weekend", "festival"] = "every_day"
+    # Only for a festival offer: the first and last day it applies.
+    festivalFrom: Optional[datetime.date] = None
+    festivalTo: Optional[datetime.date] = None
+
+    @model_validator(mode="after")
+    def _festival_dates(self) -> "CreateTargetBody":
+        if self.dayType != "festival":
+            self.festivalFrom = self.festivalTo = None
+
+            return self
+
+        if self.festivalFrom is None:
+            raise ValueError("Choose the festival date")
+
+        self.festivalTo = self.festivalTo or self.festivalFrom
+
+        if self.festivalTo < self.festivalFrom:
+            raise ValueError("The festival ends before it starts")
+
+        if (self.festivalTo - self.festivalFrom).days > 30:
+            raise ValueError("A festival offer covers up to a month")
+
+        return self
 
     @field_validator("name")
     @classmethod

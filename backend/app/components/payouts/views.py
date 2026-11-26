@@ -133,9 +133,9 @@ RESTAURANT_BREAKDOWN = """
 RIDER_BREAKDOWN = """
     select coalesce(sum((e.breakdown->>'basePaise')::bigint) filter (where e.kind = 'delivery'), 0)::bigint as base,
            coalesce(sum((e.breakdown->>'distancePaise')::bigint) filter (where e.kind = 'delivery'), 0)::bigint as distance,
-           coalesce(sum((e.breakdown->>'incentivePaise')::bigint) filter (where e.kind = 'delivery'), 0)::bigint as incentive,
+           coalesce(sum((e.breakdown->>'incentivePaise')::bigint) filter (where e.kind in ('delivery', 'incentive')), 0)::bigint as incentive,
            coalesce(sum((e.breakdown->>'tipPaise')::bigint) filter (where e.kind = 'delivery'), 0)::bigint as tips,
-           coalesce(sum((e.breakdown->>'tdsPaise')::bigint) filter (where e.kind = 'delivery'), 0)::bigint as tds,
+           coalesce(sum((e.breakdown->>'tdsPaise')::bigint) filter (where e.kind in ('delivery', 'incentive')), 0)::bigint as tds,
            coalesce(-sum(e.amount_paise) filter (where e.kind = 'cash_collected'), 0)::bigint as cash_collected,
            coalesce(sum(e.amount_paise) filter (where e.kind = 'cash_deposit'), 0)::bigint as cash_deposited,
            coalesce(-sum(e.amount_paise) filter (where e.kind = 'refund'), 0)::bigint as refunds,

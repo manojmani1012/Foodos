@@ -36,6 +36,7 @@ BEFORE_START = "before_automatic_payouts"
 KIND_LABELS = {
     "order": "Order",
     "delivery": "Delivery",
+    "incentive": "Shift incentive",
     "cash_collected": "Cash collected",
     "cash_deposit": "Cash deposited",
     "refund": "Refund",
@@ -245,6 +246,31 @@ async def record_order(connection: asyncpg.Connection, order_id: uuid.UUID) -> i
             written += 1
 
     return written
+
+
+async def record_incentive(
+    connection: asyncpg.Connection, partner_id: uuid.UUID, day: Any, gross_paise: int, trips: int
+) -> bool:
+    """The day's per-order incentive, earned under the shift rule. It belongs
+    to the day it was earned, and TDS comes off it like other rider pay."""
+    tds = payment_settings.rider_tds(0, gross_paise)
+
+    return bool(
+        await _insert(
+            connection,
+            party_type="delivery_partner",
+            party_id=partner_id,
+            kind="incentive",
+            amount=gross_paise - tds,
+            # Midday of the day earned, which every cutoff puts on that day.
+            source=f"incentive:{partner_id}:{day.isoformat()}:{uuid.uuid4().hex[:8]}",
+            moment_sql="($2::date + time '12:00') at time zone 'Asia/Kolkata'",
+            moment_args=(day,),
+            breakdown={"incentivePaise": gross_paise, "orderIncentivePaise": gross_paise, "tdsPaise": tds,
+                       "trips": trips},
+            note=f"Shift incentive for {trips} deliveries on {day.strftime('%d %b')}",
+        )
+    )
 
 
 async def record_deposit(connection: asyncpg.Connection, deposit_id: uuid.UUID) -> bool:

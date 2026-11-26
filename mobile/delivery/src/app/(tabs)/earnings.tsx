@@ -165,11 +165,22 @@ export default function EarningsScreen() {
               </View>
               <Text style={styles.rule}>
                 {rule
-                  ? `How you are paid: ${formatRupees(rule.basePaise)} for the first ${rule.baseKm} km, ${formatRupees(rule.perKmPaise)} per km after that${rule.orderIncentivePaise > 0 ? `, ${formatRupees(rule.orderIncentivePaise)} bonus on every delivered order` : ''}, and every rupee of tips.`
+                  ? `How you are paid: ${formatRupees(rule.basePaise)} for the first ${rule.baseKm} km, ${formatRupees(rule.perKmPaise)} per km after that${rule.orderIncentivePaise > 0 ? `, ${formatRupees(rule.orderIncentivePaise)} bonus ${rule.incentiveNeedsShifts ? 'per order on days you meet the shift hours (paid after the day ends)' : 'on every delivered order'}` : ''}, and every rupee of tips.`
                   : 'How you are paid: base pay per delivery, distance pay per km, incentives, and every rupee of a customer tip.'}
               </Text>
             </View>
           ) : null}
+
+          <View style={styles.links}>
+            <Pressable style={styles.link} onPress={() => router.push('/weekly')} accessibilityRole="button">
+              <Feather name="calendar" size={16} color={colors.brand} />
+              <Text style={styles.linkText}>Weekly earnings</Text>
+            </Pressable>
+            <Pressable style={styles.link} onPress={() => router.push('/offers')} accessibilityRole="button">
+              <Feather name="gift" size={16} color={colors.brand} />
+              <Text style={styles.linkText}>Extra earning offers</Text>
+            </Pressable>
+          </View>
 
           {accountLoaded && (!account || account.status !== 'verified') ? (
             <Pressable style={styles.bankBanner} onPress={() => router.push('/bank')}>
@@ -536,6 +547,18 @@ const styles = StyleSheet.create({
   cashTitle: { ...type.overline, color: colors.warning },
   cashValue: { ...type.title, color: colors.warning, marginTop: space.xs },
   cashHint: { ...type.caption, color: colors.warning, marginTop: space.xs, lineHeight: 16 },
+  links: { flexDirection: 'row', gap: space.sm, marginTop: space.md },
+  link: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: space.sm,
+    paddingVertical: space.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.brandSoft,
+  },
+  linkText: { ...type.smallStrong, color: colors.brandInk },
   deposit: {
     alignSelf: 'flex-start',
     marginTop: space.md,

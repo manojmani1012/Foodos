@@ -162,6 +162,8 @@ async def _order_response(order_id: uuid.UUID) -> dict:
                o.cooking_instructions, o.no_cutlery, o.delivery_preferences,
                (select row(d.rider_rating, d.rider_rating_comment) from deliveries d
                  where d.order_id = o.id and d.rider_rating is not null) as rider_review,
+               exists (select 1 from deliveries d where d.order_id = o.id and d.tip_thanked_at is not null)
+                 as tip_thanked,
                r.name as restaurant_name, r.address_line as restaurant_address,
                r.city as restaurant_city, r.phone as restaurant_phone,
                r.latitude as restaurant_lat, r.longitude as restaurant_lng,
@@ -257,6 +259,8 @@ async def _order_response(order_id: uuid.UUID) -> dict:
         "cookingInstructions": order["cooking_instructions"],
         "noCutlery": order["no_cutlery"],
         "deliveryPreferences": list(order["delivery_preferences"] or []),
+        # The rider said thanks for the tip.
+        "tipThanked": order["tip_thanked"],
         # The customer's rating of the delivery, once given.
         "riderReview": {"rating": order["rider_review"][0], "comment": order["rider_review"][1]}
         if order["rider_review"]

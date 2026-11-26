@@ -33,7 +33,7 @@ async def rider_year(partner_id: uuid.UUID, fy: Optional[int]) -> dict:
         select to_char(e.business_date, 'YYYY-MM') as month,
                coalesce(sum({EARNINGS_SQL}), 0)::bigint as earnings, coalesce(sum({TDS_SQL}), 0)::bigint as tds
         from earnings_entries e
-        where e.partner_id = $1 and e.kind = 'delivery' and e.business_date between $2 and $3
+        where e.partner_id = $1 and e.kind in ('delivery', 'incentive') and e.business_date between $2 and $3
         group by 1
         """,
         partner_id,
@@ -63,11 +63,11 @@ async def report_rows(start: datetime.date, end: datetime.date) -> list:
     """Rider-wise: deliveries, earnings excluding tips, TDS deducted."""
     return await fetch(
         f"""
-        select u.full_name, u.phone, count(*)::int as deliveries,
+        select u.full_name, u.phone, (count(*) filter (where e.kind = 'delivery'))::int as deliveries,
                coalesce(sum({EARNINGS_SQL}), 0)::bigint as earnings, coalesce(sum({TDS_SQL}), 0)::bigint as tds
         from earnings_entries e
         join users u on u.id = e.partner_id
-        where e.kind = 'delivery' and e.business_date between $1 and $2
+        where e.kind in ('delivery', 'incentive') and e.business_date between $1 and $2
         group by u.id
         order by u.full_name
         """,

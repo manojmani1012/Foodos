@@ -13,7 +13,15 @@ from typing import Any
 
 from ...database import fetch, fetchval
 
-LIVE_RULE = "r.is_active and r.starts_at <= now() and (r.ends_at is null or r.ends_at > now())"
+RUNNING = "r.is_active and r.starts_at <= now() and (r.ends_at is null or r.ends_at > now())"
+
+# Whether a running offer is for today (India time): weekends are Saturday and Sunday.
+FOR_TODAY = """(r.day_type = 'every_day'
+    or (r.day_type = 'weekday' and extract(isodow from current_date) < 6)
+    or (r.day_type = 'weekend' and extract(isodow from current_date) >= 6)
+    or (r.day_type = 'festival' and current_date between r.festival_from and r.festival_to))"""
+
+LIVE_RULE = f"{RUNNING} and {FOR_TODAY}"
 
 TRIPS_TODAY = """
     select count(*)::int from deliveries
@@ -25,7 +33,7 @@ async def today(partner_id: uuid.UUID) -> list[dict]:
     """Each live target with this rider's progress on it today."""
     rows = await fetch(
         f"""
-        select r.id, r.name, r.target_trips, r.bonus_paise,
+        select r.id, r.name, r.target_trips, r.bonus_paise, r.day_type,
                exists (
                  select 1 from incentive_awards a
                  where a.rule_id = r.id and a.partner_id = $1 and a.award_date = current_date
@@ -50,9 +58,41 @@ async def today(partner_id: uuid.UUID) -> list[dict]:
             "bonusPaise": row["bonus_paise"],
             "tripsDone": min(trips, row["target_trips"]),
             "achieved": row["achieved"],
+            "dayType": row["day_type"],
         }
         for row in rows
     ]
+
+
+async def offers(partner_id: uuid.UUID) -> dict:
+    """The Extra Earning Offers screen: today's, with progress, and every other
+    running one with the days it applies to."""
+    rows = await fetch(
+        f"""
+        select r.id, r.name, r.target_trips, r.bonus_paise, r.day_type, r.festival_from, r.festival_to
+        from incentive_rules r
+        where {RUNNING} and not {FOR_TODAY}
+          and (r.day_type <> 'festival' or r.festival_to >= current_date)
+        order by r.day_type, r.festival_from, r.target_trips
+        """
+    )
+
+    return {
+        "today": await today(partner_id),
+        "tripsToday": await fetchval(TRIPS_TODAY, partner_id),
+        "later": [
+            {
+                "id": str(row["id"]),
+                "name": row["name"],
+                "targetTrips": row["target_trips"],
+                "bonusPaise": row["bonus_paise"],
+                "dayType": row["day_type"],
+                "festivalFrom": row["festival_from"].isoformat() if row["festival_from"] else None,
+                "festivalTo": row["festival_to"].isoformat() if row["festival_to"] else None,
+            }
+            for row in rows
+        ],
+    }
 
 
 async def award(connection: Any, partner_id: uuid.UUID, delivery_id: uuid.UUID) -> list[dict]:

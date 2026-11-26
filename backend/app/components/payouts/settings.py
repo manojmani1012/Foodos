@@ -43,6 +43,15 @@ DEFAULTS: dict[str, Any] = {
     "riderBaseKm": 3,
     "riderPerKmPaise": 800,
     "riderOrderIncentivePaise": 1000,
+    # When on, that incentive is paid after the day, only to a rider online
+    # long enough in every shift who turned down no more offers than allowed.
+    # Off until the client says whether it replaces the every-order incentive.
+    "riderIncentiveNeedsShifts": False,
+    "riderShifts": [
+        {"name": "Lunch", "start": "11:00", "end": "15:00", "minMinutes": 225},
+        {"name": "Dinner", "start": "18:00", "end": "23:00", "minMinutes": 270},
+    ],
+    "riderMaxRejections": 1,
     # 'trip': rider to restaurant plus restaurant to customer; 'drop': the
     # restaurant-to-customer leg only (what the client wants).
     "riderDistanceBasis": "drop",
@@ -104,6 +113,33 @@ def _consecutive(days: list[int]) -> bool:
     return len(starts) == 1
 
 
+class RiderShift(BaseModel):
+    name: str = Field(min_length=2, max_length=30)
+    start: str
+    end: str
+    minMinutes: int = Field(ge=1, le=1440)
+
+    @field_validator("start", "end")
+    @classmethod
+    def _time(cls, value: str) -> str:
+        if not TIME_PATTERN.match(value.strip()):
+            raise ValueError("Use a 24-hour time like 11:00")
+
+        return value.strip()
+
+    @model_validator(mode="after")
+    def _fits(self) -> "RiderShift":
+        def minutes(text: str) -> int:
+            return int(text[:2]) * 60 + int(text[3:])
+
+        length = (minutes(self.end) - minutes(self.start)) % 1440
+
+        if length == 0 or self.minMinutes > length:
+            raise ValueError("The minimum online time must fit inside the shift")
+
+        return self
+
+
 class PaymentSettings(BaseModel):
     """The whole settings document. PUT sends all of it."""
 
@@ -118,6 +154,11 @@ class PaymentSettings(BaseModel):
     riderBaseKm: float = Field(ge=0, le=50)
     riderPerKmPaise: int = Field(ge=0, le=10_000)
     riderOrderIncentivePaise: int = Field(ge=0, le=100_000)
+    riderIncentiveNeedsShifts: bool = False
+    riderShifts: list[RiderShift] = Field(
+        default_factory=lambda: [RiderShift(**shift) for shift in DEFAULTS["riderShifts"]], min_length=1, max_length=4
+    )
+    riderMaxRejections: int = Field(default=1, ge=0, le=100)
     riderDistanceBasis: Literal["trip", "drop"]
     payoutSchedule: list[ScheduleGroup] = Field(min_length=1, max_length=7)
     cutoffTime: str
@@ -276,6 +317,7 @@ def pay_rule() -> dict:
         "baseKm": settings["riderBaseKm"],
         "perKmPaise": settings["riderPerKmPaise"],
         "orderIncentivePaise": settings["riderOrderIncentivePaise"],
+        "incentiveNeedsShifts": settings["riderIncentiveNeedsShifts"],
         "distanceBasis": settings["riderDistanceBasis"],
     }
 

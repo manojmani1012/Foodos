@@ -27,6 +27,7 @@ until they hand it over (cash.py).
 """
 
 import uuid
+from datetime import timedelta
 from typing import Any, Optional
 
 from ...config import get_settings
@@ -36,7 +37,7 @@ from ..geo import distance_km
 from ..notifications import events
 from ..orders.delivery_code import LOCK_SECONDS, MAX_ATTEMPTS, code_required
 from ..orders.notes import rider_note
-from . import cash, dispatch, targets
+from . import cash, dispatch, shifts, targets
 from ..payouts import ledger
 from ..payouts import settings as payment_settings
 from .dispatch import ACTIVE, as_address as _address, order_incentive, rider_pay, trip
@@ -189,6 +190,162 @@ async def profile(user_id: uuid.UUID) -> dict:
         "targets": await targets.today(user_id),
         # Cash from cash orders still in the rider's pocket, and the limit.
         "cash": await cash.summary(user_id),
+        # The latest tip not yet thanked for, for the banner on the home screen.
+        "tipToThank": await _tip_to_thank(user_id),
+    }
+
+
+async def _tip_to_thank(user_id: uuid.UUID) -> Optional[dict]:
+    row = await fetchrow(
+        """
+        select d.id, d.tip_paise, o.order_number, u.full_name as customer_name
+        from deliveries d
+        join orders o on o.id = d.order_id
+        join users u on u.id = o.customer_id
+        where d.partner_id = $1 and d.status = 'delivered' and d.tip_paise > 0 and d.tip_thanked_at is null
+          and d.delivered_at > now() - interval '24 hours'
+        order by d.delivered_at desc
+        limit 1
+        """,
+        user_id,
+    )
+
+    if row is None:
+        return None
+
+    return {
+        "deliveryId": str(row["id"]),
+        "orderNumber": row["order_number"],
+        "tipPaise": row["tip_paise"],
+        "customerName": (row["customer_name"] or "").split(" ")[0] or None,
+    }
+
+
+async def thank_for_tip(user_id: uuid.UUID, delivery_id: str) -> None:
+    """"Say thanks": the customer is told once."""
+    identifier = _as_uuid(delivery_id)
+    row = await fetchrow(
+        """
+        update deliveries d set tip_thanked_at = now()
+        from users u
+        where d.id = $1 and d.partner_id = $2 and u.id = d.partner_id
+          and d.status = any($3::text[]) and d.tip_paise > 0 and d.tip_thanked_at is null
+        returning d.order_id, d.tip_paise, u.full_name
+        """,
+        identifier,
+        user_id,
+        [*ACTIVE, "delivered"],
+    )
+
+    if row is None:
+        mine = await fetchrow(
+            "select tip_thanked_at from deliveries where id = $1 and partner_id = $2", identifier, user_id
+        )
+
+        if mine is None:
+            raise not_found("delivery_not_found", "That delivery could not be found")
+
+        # A second tap: already thanked is fine.
+        if mine["tip_thanked_at"] is not None:
+            return
+
+        raise conflict("no_tip_to_thank", "There is no tip to thank for on this delivery")
+
+    await events.tip_thanks(row["order_id"], row["full_name"], row["tip_paise"])
+
+
+async def weekly_earnings(user_id: uuid.UUID, weeks: int) -> dict:
+    """Earnings week by week (Monday to Sunday), tips apart from pay."""
+    rows = await fetch(
+        """
+        with weeks as (
+          select (date_trunc('week', current_date) - make_interval(weeks => n))::date as start
+          from generate_series(0, $2::int - 1) n
+        )
+        select w.start,
+               count(x.id)::int as deliveries,
+               coalesce(sum(x.base_earning_paise), 0)::int as pay,
+               coalesce(sum(x.incentive_paise), 0)::int as incentive,
+               coalesce(sum(x.tip_paise), 0)::int as tips,
+               (count(x.id) filter (where x.tip_paise > 0))::int as tipped,
+               coalesce(sum((e.breakdown->>'tdsPaise')::bigint), 0)::int as tds
+        from weeks w
+        left join deliveries x
+          on x.partner_id = $1 and x.status = 'delivered'
+         and x.delivered_at::date >= w.start and x.delivered_at::date < w.start + 7
+        left join earnings_entries e on e.source = 'order:' || x.order_id || ':rider'
+        group by w.start
+        order by w.start desc
+        """,
+        user_id,
+        weeks,
+    )
+
+    daily = await fetch(
+        """
+        select delivered_at::date as day, count(*)::int as deliveries,
+               coalesce(sum(base_earning_paise + incentive_paise + tip_paise), 0)::int as earnings
+        from deliveries
+        where partner_id = $1 and status = 'delivered'
+          and delivered_at::date >= (date_trunc('week', current_date) - make_interval(weeks => $2::int - 1))::date
+        group by 1
+        """,
+        user_id,
+        weeks,
+    )
+    by_day = {row["day"]: row for row in daily}
+    payouts = await fetch(
+        """
+        select period_start, period_end, status, net_paise, payout_reference, paid_at, scheduled_for
+        from payouts
+        where party_type = 'delivery_partner' and partner_id = $1 and status <> 'cancelled'
+        order by scheduled_for, period_end
+        """,
+        user_id,
+    )
+
+    def days_of(start):
+        for offset in range(7):
+            day = start + timedelta(days=offset)
+            found = by_day.get(day)
+
+            yield {
+                "date": day.isoformat(),
+                "deliveries": found["deliveries"] if found else 0,
+                "earningsPaise": found["earnings"] if found else 0,
+            }
+
+    # A payout belongs to the week its period ends in.
+    def payouts_of(start):
+        return [
+            {
+                "status": row["status"],
+                "netPaise": row["net_paise"],
+                "reference": row["payout_reference"],
+                "paidAt": row["paid_at"].isoformat() if row["paid_at"] else None,
+                "scheduledFor": row["scheduled_for"].isoformat() if row["scheduled_for"] else None,
+            }
+            for row in payouts
+            if start <= row["period_end"] <= start + timedelta(days=6)
+        ]
+
+    return {
+        "weeks": [
+            {
+                "weekStart": row["start"].isoformat(),
+                "weekEnd": (row["start"] + timedelta(days=6)).isoformat(),
+                "deliveries": row["deliveries"],
+                "payPaise": row["pay"],
+                "incentivePaise": row["incentive"],
+                "tipsPaise": row["tips"],
+                "tippedDeliveries": row["tipped"],
+                "earningsPaise": row["pay"] + row["incentive"] + row["tips"],
+                "tdsPaise": row["tds"],
+                "days": list(days_of(row["start"])),
+                "payouts": payouts_of(row["start"]),
+            }
+            for row in rows
+        ]
     }
 
 
@@ -228,6 +385,11 @@ async def set_online(user_id: uuid.UUID, online: bool) -> dict:
         "update delivery_partners set is_online = $2 where user_id = $1 returning 1", user_id, online
     )
 
+    if online:
+        await shifts.seen(user_id)
+    else:
+        await shifts.gone_offline(user_id)
+
     return await profile(user_id)
 
 
@@ -257,17 +419,21 @@ async def update_location(user_id: uuid.UUID, latitude: float, longitude: float,
     if mocked and await _flag_mock_location(user_id):
         raise AppError(409, "mock_location", MOCK_LOCATION_MESSAGE)
 
-    await fetchval(
+    online = await fetchval(
         """
         update delivery_partners
         set current_latitude = $2, current_longitude = $3, last_location_at = now()
         where user_id = $1
-        returning 1
+        returning is_online and status = 'active'
         """,
         user_id,
         latitude,
         longitude,
     )
+
+    # Each report while online is what counts the rider's login hours.
+    if online:
+        await shifts.seen(user_id)
 
 
 # --- Finding work ----------------------------------------------------------
@@ -690,7 +856,16 @@ async def advance(
             # every existing sum of rider pay includes it.
             per_order = order_incentive(False)
 
-            if per_order:
+            current = payment_settings.current()
+
+            if current["riderIncentiveNeedsShifts"] and current["riderOrderIncentivePaise"]:
+                # Waits for the day to end (shifts.py).
+                await connection.execute(
+                    "update deliveries set deferred_incentive_paise = $2 where id = $1",
+                    identifier,
+                    current["riderOrderIncentivePaise"],
+                )
+            elif per_order:
                 await connection.execute(
                     """
                     update deliveries
@@ -758,7 +933,7 @@ async def _delivery_detail(identifier: uuid.UUID) -> dict:
     row = await fetchrow(
         """
         select d.id, d.status, d.pickup_distance_km, d.drop_distance_km, d.total_distance_km,
-               d.base_earning_paise, d.incentive_paise, d.tip_paise,
+               d.base_earning_paise, d.incentive_paise, d.tip_paise, d.tip_thanked_at,
                d.accepted_at, d.picked_up_at, d.delivered_at,
                o.id as order_id, o.order_number, o.status as order_status, o.payment_method,
                o.payment_status, o.total_paise, o.delivery_address, o.special_instructions, o.delivery_preferences,
@@ -825,6 +1000,7 @@ async def _delivery_detail(identifier: uuid.UUID) -> dict:
         + row["tip_paise"]
         + (order_incentive(row["is_test"]) if row["status"] in ACTIVE else 0),
         "tipPaise": row["tip_paise"],
+        "tipThanked": row["tip_thanked_at"] is not None,
         "acceptedAt": row["accepted_at"].isoformat() if row["accepted_at"] else None,
         "deliveredAt": row["delivered_at"].isoformat() if row["delivered_at"] else None,
     }

@@ -27,6 +27,7 @@ import {
   formatKm,
   formatRupees,
   navigateTo,
+  thankForTip,
   NEXT_STEP,
   type Delivery,
   type TargetReached,
@@ -334,6 +335,8 @@ export default function DeliveryScreen() {
             </>
           )}
 
+          {delivery.tipPaise > 0 ? <ActiveTip key={delivery.id} delivery={delivery} /> : null}
+
           <View style={styles.earningRow}>
             <Text style={styles.earningLabel}>You earn on this order</Text>
             <Text style={styles.earningValue}>{formatRupees(delivery.earningPaise)}</Text>
@@ -419,7 +422,59 @@ function PlaceCard({
   )
 }
 
+// "The customer tipped": shown while the order is on the way, with a thank-you.
+function ActiveTip({ delivery }: { delivery: Delivery }) {
+  const [state, setState] = useState<'ask' | 'sending' | 'sent' | 'failed'>(delivery.tipThanked ? 'sent' : 'ask')
+
+  async function thank() {
+    setState('sending')
+
+    try {
+      await thankForTip(delivery.id)
+      setState('sent')
+    } catch {
+      setState('failed')
+    }
+  }
+
+  return (
+    <View style={styles.tipBanner}>
+      <View style={styles.tipBannerText}>
+        <Text style={styles.tipBannerTitle}>Customer tipped {formatRupees(delivery.tipPaise)}</Text>
+        <Text style={styles.tipBannerHint}>
+          {state === 'failed' ? 'Could not send your thanks. Try again.' : 'Added to your earnings after delivery.'}
+        </Text>
+      </View>
+      {state === 'sent' ? (
+        <Text style={styles.tipBannerTitle}>Thanks sent</Text>
+      ) : (
+        <Pressable style={styles.tipBannerButton} onPress={thank} disabled={state === 'sending'} accessibilityRole="button">
+          <Text style={styles.tipBannerButtonText}>{state === 'sending' ? 'Sending…' : 'Say thanks'}</Text>
+        </Pressable>
+      )}
+    </View>
+  )
+}
+
 const styles = StyleSheet.create({
+  tipBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    padding: space.md,
+    borderRadius: radius.lg,
+    backgroundColor: colors.brandSoft,
+  },
+  tipBannerText: { flex: 1 },
+  tipBannerTitle: { ...type.smallStrong, color: colors.brandInk },
+  tipBannerHint: { ...type.caption, color: colors.brandInk },
+  tipBannerButton: {
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+    borderRadius: radius.pill,
+    backgroundColor: colors.brand,
+  },
+  tipBannerButtonText: { ...type.smallStrong, color: colors.surface },
   screen: { flex: 1, backgroundColor: colors.ground },
   flex: { flex: 1 },
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.xl, gap: space.sm },

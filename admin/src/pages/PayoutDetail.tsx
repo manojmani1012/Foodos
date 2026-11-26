@@ -26,6 +26,7 @@ const ENTRY_KIND: Record<string, string> = {
   delivery: 'Delivery',
   cash_collected: 'Cash collected',
   cash_deposit: 'Cash handed over',
+  incentive: 'Shift incentive',
   refund: 'Refund',
   adjustment: 'Adjustment',
 }

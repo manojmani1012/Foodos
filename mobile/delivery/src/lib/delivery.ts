@@ -27,6 +27,80 @@ export type Partner = {
   // "Complete 15 trips, earn ₹250 extra", with today's progress.
   targets: Target[]
   cash: CashInHand
+  // The latest tip not yet thanked for. Absent on older servers.
+  tipToThank?: { deliveryId: string; orderNumber: string; tipPaise: number; customerName: string | null } | null
+}
+
+export type EarningOffer = {
+  id: string
+  name: string
+  targetTrips: number
+  bonusPaise: number
+  dayType: 'every_day' | 'weekday' | 'weekend' | 'festival'
+  festivalFrom: string | null
+  festivalTo: string | null
+}
+
+export type EarningOffers = { today: Target[]; tripsToday: number; later: EarningOffer[] }
+
+export type ShiftStanding = {
+  ruleOn: boolean
+  incentivePerOrderPaise: number
+  today: {
+    onlineMinutes: number
+    shifts: { name: string; start: string; end: string; minMinutes: number; doneMinutes: number; met: boolean }[]
+    rejections: number
+    maxRejections: number
+    eligible: boolean
+  }
+  days: { date: string; onlineMinutes: number }[]
+  results: { date: string; eligible: boolean; trips: number; amountPaise: number }[]
+}
+
+export type WeekEarnings = {
+  weekStart: string
+  weekEnd: string
+  deliveries: number
+  payPaise: number
+  incentivePaise: number
+  tipsPaise: number
+  tippedDeliveries: number
+  earningsPaise: number
+  tdsPaise: number
+  days: { date: string; deliveries: number; earningsPaise: number }[]
+  payouts: {
+    status: PayoutStatus
+    netPaise: number
+    reference: string | null
+    paidAt: string | null
+    scheduledFor: string | null
+  }[]
+}
+
+export async function fetchEarningOffers(): Promise<EarningOffers> {
+  const { ok, ...offers } = await request('/api/v1/delivery/offers')
+
+  return offers
+}
+
+export async function fetchShiftStanding(): Promise<ShiftStanding> {
+  const { ok, ...standing } = await request('/api/v1/delivery/shifts')
+
+  return standing
+}
+
+export async function fetchWeeklyEarnings(weeks = 8): Promise<WeekEarnings[]> {
+  const body = await request(`/api/v1/delivery/earnings/weekly?weeks=${weeks}`)
+
+  return body.weeks
+}
+
+export function thankForTip(deliveryId: string) {
+  return request(`/api/v1/delivery/deliveries/${deliveryId}/thank`, { method: 'POST' })
+}
+
+export function formatDuration(minutes: number): string {
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`
 }
 
 export type Target = {
@@ -151,6 +225,7 @@ export type Delivery = {
   isTest: boolean
   earningPaise: number
   tipPaise: number
+  tipThanked?: boolean
   acceptedAt: string | null
   deliveredAt: string | null
 }
@@ -162,6 +237,8 @@ export type PayRule = {
   baseKm: number
   perKmPaise: number
   orderIncentivePaise: number
+  // The bonus depends on the day's shift hours rather than each order.
+  incentiveNeedsShifts?: boolean
 }
 
 export type Earnings = {
@@ -230,7 +307,7 @@ export type PayoutSummary = {
   breakdown?: PayoutBreakdown
 }
 
-export type EntryKind = 'delivery' | 'cash_collected' | 'cash_deposit' | 'refund' | 'adjustment' | string
+export type EntryKind = 'delivery' | 'incentive' | 'cash_collected' | 'cash_deposit' | 'refund' | 'adjustment' | string
 
 export type PayoutEntry = {
   id: number | string
@@ -295,6 +372,7 @@ export const ENTRY_KIND: Record<string, string> = {
   delivery: 'Delivery',
   cash_collected: 'Cash collected',
   cash_deposit: 'Cash handed over',
+  incentive: 'Shift incentive',
   refund: 'Refund',
   adjustment: 'Adjustment',
 }

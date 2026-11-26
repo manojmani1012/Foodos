@@ -103,7 +103,7 @@ def _totals(party_type: str, rows: list[Any]) -> dict:
                 + int(b.get("gatewayFeePaise", 0))
                 + int(b.get("gstOnCommissionPaise", 0))
             )
-        elif row["kind"] == "delivery":
+        elif row["kind"] in ("delivery", "incentive"):
             # Pay before the TDS taken off it; the TDS lands in adjustments.
             gross += row["amount_paise"] + int(b.get("tdsPaise", 0))
 

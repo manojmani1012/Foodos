@@ -356,6 +356,9 @@ export default function OrderScreen() {
           <BillRow label="GST" value={order.tax} />
           {order.discount > 0 && <BillRow label="Discount" value={-order.discount} tone="good" />}
           {order.tip > 0 && <BillRow label="Delivery partner tip" value={order.tip} />}
+          {order.tipThanked ? (
+            <Text style={styles.tipThanks}>Your delivery partner says thank you for the tip.</Text>
+          ) : null}
           {order.roundOff !== 0 && <BillRow label="Round off" value={order.roundOff} />}
 
           <View style={styles.billTotal}>
@@ -573,6 +576,7 @@ function refundText(refund: NonNullable<Order['refund']>): string {
 }
 
 const styles = StyleSheet.create({
+  tipThanks: { ...type.caption, color: colors.brand, marginTop: space.xs },
   riderCard: {
     flexDirection: 'row',
     alignItems: 'center',

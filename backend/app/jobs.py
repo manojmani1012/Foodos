@@ -14,7 +14,7 @@ import asyncio
 import logging
 import time
 
-from .components.delivery import dispatch
+from .components.delivery import dispatch, shifts
 from .components.orders import timeouts
 from .components.payouts import ledger, schedule
 from .components.payouts import settings as payment_settings
@@ -49,6 +49,7 @@ async def payouts_pass() -> None:
             # Picks up a settings change made on another server.
             await payment_settings.load()
             await ledger.sweep()
+            await shifts.settle()
 
         if _due("payouts", PAYOUTS_EVERY_SECONDS):
             await schedule.run()
