@@ -1,4 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom'
+import { RefundRequests } from '../components/RefundProof'
 import { TestBadge } from '../components/TestAccount'
 import { Badge, Card, Empty, Loadable, PageHeader, Pagination, SearchBox, StatusBadge, Tabs } from '../components/ui'
 import { api } from '../lib/api'
@@ -50,6 +51,8 @@ export default function Orders() {
         title="Orders"
         subtitle={filters.view === 'live' ? 'Live orders refresh every 15 seconds.' : undefined}
       />
+
+      <RefundRequests />
 
       <Tabs<View>
         value={filters.view as View}

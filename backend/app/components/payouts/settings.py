@@ -66,6 +66,8 @@ DEFAULTS: dict[str, Any] = {
     # Money that always stays in the bank account when paying out.
     "reservePaise": 1_000_000,
     "refundChargedToDefault": "restaurant",
+    # A partial refund taken off a restaurant's or rider's pay needs a photo.
+    "refundPhotoRequired": True,
     # When staff pay on a payout day. Shown in the apps; nothing runs at it.
     "payoutTime": "10:00",
 }
@@ -125,6 +127,7 @@ class PaymentSettings(BaseModel):
     minPayoutPaise: int = Field(ge=0, le=10_000_000)
     reservePaise: int = Field(default=1_000_000, ge=0, le=1_000_000_000)
     refundChargedToDefault: Literal["restaurant", "rider", "foodos"]
+    refundPhotoRequired: bool = True
     payoutTime: str
 
     @field_validator("cutoffTime", "payoutTime")

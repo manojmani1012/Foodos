@@ -226,7 +226,8 @@ async def get_order(order_id: str) -> dict:
     refund_rows = await fetch(
         """
         select f.id, f.status, f.amount_paise, f.reason, f.provider_refund_id, f.created_at, f.processed_at,
-               f.charged_to, f.destination,
+               f.charged_to, f.destination, f.issue,
+               array(select ph.id from refund_photos ph where ph.refund_id = f.id order by ph.created_at) as photo_ids,
                u.full_name as requested_by_name, u.email as requested_by_email
         from refunds f
         left join users u on u.id = f.requested_by
@@ -311,6 +312,8 @@ async def get_order(order_id: str) -> dict:
                 # Partial refunds say who bears them; a cancellation refund is null.
                 "chargedTo": f["charged_to"],
                 "destination": f["destination"],
+                "issue": f["issue"],
+                "photoIds": [str(value) for value in f["photo_ids"]],
             }
             for f in refund_rows
         ],
@@ -445,10 +448,19 @@ async def retry_refund(order_id: str, actor_id: uuid.UUID, ip: Optional[str]) ->
 
 
 async def partial_refund(
-    order_id: str, amount_paise: int, reason: str, charged_to: str, actor_id: uuid.UUID, ip: Optional[str]
+    order_id: str,
+    amount_paise: int,
+    reason: str,
+    charged_to: str,
+    actor_id: uuid.UUID,
+    ip: Optional[str],
+    issue: Optional[str] = None,
+    photo_ids: Optional[list[str]] = None,
 ) -> dict:
     """Gives back part of a delivered order (see payments/refunds.py)."""
     identifier = as_uuid(order_id)
-    await refunds.partial_refund(identifier, amount_paise, reason, charged_to, actor_id, ip)
+    await refunds.partial_refund(
+        identifier, amount_paise, reason, charged_to, actor_id, ip, issue=issue, photo_ids=photo_ids
+    )
 
     return await get_order(str(identifier))

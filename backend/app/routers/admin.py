@@ -9,7 +9,7 @@ import datetime
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import Response
 
 from ..components.payouts import bank, finance, ledger, schedule
@@ -43,6 +43,8 @@ from ..components.admin.schemas import (
     IncludeExcludedBody,
     PartialRefundBody,
     PayoutPaidBody,
+    RefundApproveBody,
+    RefundRejectBody,
     PayoutReasonBody,
     PayoutRescheduleBody,
     ReviewDocumentBody,
@@ -58,6 +60,8 @@ from ..components.admin.schemas import (
 )
 from ..components.auth.dependencies import CurrentUser, require_role
 from ..components.delivery import documents as rider_documents
+from ..components.media.service import MAX_IMAGE_BYTES
+from ..components.payments import proof
 from ..components.payouts.accounts import PayoutAccountBody, VerifyAccountBody
 from ..components.orders import invoice
 from ..errors import not_found
@@ -297,9 +301,49 @@ async def assign_rider(order_id: str, body: AssignRiderBody, actor: Actor = Depe
 
 @router.post("/orders/{order_id}/refunds")
 async def partial_refund(order_id: str, body: PartialRefundBody, actor: Actor = Depends(acting_admin)):
-    order = await orders.partial_refund(order_id, body.amountPaise, body.reason, body.chargedTo, actor.id, actor.ip)
+    order = await orders.partial_refund(
+        order_id, body.amountPaise, body.reason, body.chargedTo, actor.id, actor.ip, body.issue, body.photoIds
+    )
 
     return {"ok": True, "order": order}
+
+
+@router.post("/orders/{order_id}/refund-photos", status_code=201)
+async def add_refund_photo(order_id: str, file: UploadFile = File(...), actor: Actor = Depends(acting_admin)):
+    identifier = orders.as_uuid(order_id)
+    await orders.get_order(str(identifier))
+    photo = await proof.add_photo(identifier, actor.id, await file.read(MAX_IMAGE_BYTES + 1))
+
+    return {"ok": True, "photo": photo}
+
+
+@router.get("/refund-photos/{photo_id}/file")
+async def refund_photo_file(photo_id: str, user: CurrentUser = Depends(admin_only)):
+    image = await proof.photo_file(photo_id)
+
+    if image is None:
+        raise not_found("photo_not_found", "That photo could not be found")
+
+    return Response(
+        content=bytes(image["data"]),
+        media_type=image["content_type"],
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.get("/refund-requests")
+async def refund_requests(status: Literal["pending", "all"] = "pending", user: CurrentUser = Depends(admin_only)):
+    return {"ok": True, **await proof.list_requests(status)}
+
+
+@router.post("/refund-requests/{request_id}/approve")
+async def approve_refund_request(request_id: str, body: RefundApproveBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "request": await proof.approve(request_id, body.amountPaise, actor.id, actor.ip)}
+
+
+@router.post("/refund-requests/{request_id}/reject")
+async def reject_refund_request(request_id: str, body: RefundRejectBody, actor: Actor = Depends(acting_admin)):
+    return {"ok": True, "request": await proof.reject(request_id, body.reason, actor.id, actor.ip)}
 
 
 @router.post("/orders/{order_id}/refund")

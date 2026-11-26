@@ -545,13 +545,14 @@ export type PhotoSource = 'camera' | 'library'
 // Returns a local file ready to upload, or null if the owner backed out.
 export async function pickDishPhoto(
   source: PhotoSource,
-  aspect: [number, number] = [4, 3],
+  // The crop for a dish or cover photo. Pass null for an uncropped photo.
+  aspect: [number, number] | null = [4, 3],
 ): Promise<string | null> {
   const options: ImagePicker.ImagePickerOptions = {
     mediaTypes: ['images'],
     // Every dish card is the same shape, so the crop is fixed to match it.
-    allowsEditing: true,
-    aspect,
+    allowsEditing: !!aspect,
+    aspect: aspect ?? undefined,
     quality: 1,
   }
 
@@ -561,7 +562,7 @@ export async function pickDishPhoto(
     const permission = await ImagePicker.requestCameraPermissionsAsync()
 
     if (!permission.granted) {
-      throw new Error('Allow camera access in your phone settings to take dish photos')
+      throw new Error('Allow camera access in your phone settings to take photos')
     }
 
     result = await ImagePicker.launchCameraAsync(options)
@@ -597,6 +598,50 @@ export async function uploadDishPhoto(itemId: string, fileUri: string): Promise<
   })
 
   return item
+}
+
+// --- Refunds for a food problem --------------------------------------------
+
+export type RefundRequest = {
+  id: string
+  amountPaise: number
+  refundedPaise: number | null
+  reason: string
+  status: 'pending' | 'approved' | 'rejected'
+  rejectReason: string | null
+  createdAt: string
+}
+
+export type OrderRefunds = {
+  canRequest: boolean
+  refundablePaise: number
+  windowDays: number
+  requests: RefundRequest[]
+}
+
+export function fetchOrderRefunds(orderId: string): Promise<OrderRefunds> {
+  return request(`${BASE}/orders/${orderId}/refunds`)
+}
+
+export async function uploadRefundPhoto(orderId: string, fileUri: string): Promise<string> {
+  const form = new FormData()
+  form.append('file', { uri: fileUri, name: 'problem.jpg', type: 'image/jpeg' } as any)
+
+  const { photo } = await request(`${BASE}/orders/${orderId}/refund-photos`, { method: 'POST', body: form })
+
+  return photo.id
+}
+
+export function requestRefund(
+  orderId: string,
+  amountPaise: number,
+  reason: string,
+  photoIds: string[],
+): Promise<OrderRefunds> {
+  return request(`${BASE}/orders/${orderId}/refund-requests`, {
+    method: 'POST',
+    body: { amountPaise, reason, photoIds },
+  })
 }
 
 export async function removeDishPhoto(itemId: string): Promise<MenuItem> {

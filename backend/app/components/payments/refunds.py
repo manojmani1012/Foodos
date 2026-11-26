@@ -20,6 +20,7 @@ from ...database import execute, fetchrow, transaction
 from ...errors import AppError
 from ..admin import audit
 from ..payouts import ledger
+from ..payouts import settings as payment_settings
 from ..wallet import service as wallet
 from . import razorpay
 
@@ -261,7 +262,15 @@ async def apply_refund_webhook(event_type: str, entity: dict) -> dict:
 
 
 async def partial_refund(
-    order_id: uuid.UUID, amount_paise: int, reason: str, charged_to: str, actor_id: uuid.UUID, ip: Optional[str]
+    order_id: uuid.UUID,
+    amount_paise: int,
+    reason: str,
+    charged_to: str,
+    actor_id: uuid.UUID,
+    ip: Optional[str],
+    issue: Optional[str] = None,
+    photo_ids: Optional[list[str]] = None,
+    request_id: Optional[uuid.UUID] = None,
 ) -> dict:
     """Gives back part of a delivered order: a missing item, a cold dish.
 
@@ -273,6 +282,9 @@ async def partial_refund(
     Charged to the restaurant or the rider, the refund comes off their next
     payout (a 'refund' row in the earnings ledger); charged to Foodos, it
     comes off nobody's.
+
+    Taking it off someone's pay needs photo proof (a setting): photos named
+    here, or those on the restaurant's request being approved.
     """
     reason = reason.strip()
 
@@ -331,11 +343,27 @@ async def partial_refund(
         )
         to_wallet = payment is None or payment["provider"] == "wallet"
 
+        # Imported here: proof.py makes refunds through this module.
+        from . import proof
+
+        photos = await proof.claim(connection, photo_ids or [], order_id, actor_id)
+
+        if (
+            request_id is None
+            and not photos
+            and charged_to != "foodos"
+            and payment_settings.current()["refundPhotoRequired"]
+        ):
+            raise AppError(
+                400, "photo_required", "Add a photo of the problem before taking the refund off someone's pay"
+            )
+
         refund_id = await connection.fetchval(
             """
             insert into refunds
-              (payment_id, order_id, amount_paise, reason, status, requested_by, processed_at, charged_to, destination)
-            values ($1, $2, $3, $4, $5, $6, case when $5 = 'processed' then now() end, $7, $8)
+              (payment_id, order_id, amount_paise, reason, status, requested_by, processed_at, charged_to, destination,
+               issue)
+            values ($1, $2, $3, $4, $5, $6, case when $5 = 'processed' then now() end, $7, $8, $9)
             returning id
             """,
             payment["id"] if payment else None,
@@ -346,6 +374,13 @@ async def partial_refund(
             actor_id,
             charged_to,
             "wallet" if to_wallet else "original",
+            issue,
+        )
+        await connection.execute(
+            "update refund_photos set refund_id = $2 where id = any($1::uuid[]) or request_id = $3",
+            photos,
+            refund_id,
+            request_id,
         )
 
         if to_wallet:

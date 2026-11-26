@@ -1,3 +1,4 @@
+import { RefundPhotos } from '../components/RefundProof'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { RiderFinder } from '../components/RiderFinder'
@@ -19,7 +20,7 @@ import {
   titleCase,
 } from '../lib/format'
 import { useToast } from '../lib/toast'
-import type { Order, PaymentSettings, RefundChargedTo } from '../lib/types'
+import type { Order, PaymentSettings, RefundChargedTo, RefundIssue } from '../lib/types'
 import { useLoad } from '../lib/useLoad'
 
 const LIVE = ['pending', 'confirmed', 'preparing', 'ready', 'picked_up', 'on_the_way']
@@ -42,6 +43,14 @@ async function openInvoice(orderId: string) {
   }
 }
 
+const ISSUE_LABEL: Record<RefundIssue, string> = {
+  food: 'Food problem',
+  delivery: 'Delivery problem',
+  app: 'App problem',
+}
+
+const ISSUE_PAYER: Record<RefundIssue, RefundChargedTo> = { food: 'restaurant', delivery: 'rider', app: 'foodos' }
+
 // Money goes back where it came from: online payments to the card or UPI
 // through Razorpay; wallet and cash orders to the customer's Foodos wallet.
 function refundsToWallet(order: Order) {
@@ -53,17 +62,35 @@ function PartialRefund({ order, onDone, onClose }: { order: Order; onDone: (orde
   const left = Math.max(0, order.totalPaise - refunded)
   const [amount, setAmount] = useState('')
   const [reason, setReason] = useState('')
+  const [issue, setIssue] = useState<RefundIssue>('food')
   const [chargedTo, setChargedTo] = useState<RefundChargedTo>('restaurant')
+  const [files, setFiles] = useState<File[]>([])
+  const [photoRequired, setPhotoRequired] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const wallet = refundsToWallet(order)
 
-  // Pre-select who bears it as set in Settings; Restaurant if that cannot load.
+  // Pre-select the problem from the default payer in Settings; food if that cannot load.
   useEffect(() => {
     api<{ settings: PaymentSettings }>('/api/v1/admin/finance/settings')
-      .then(({ settings }) => settings.refundChargedToDefault && setChargedTo(settings.refundChargedToDefault))
+      .then(({ settings }) => {
+        setPhotoRequired(settings.refundPhotoRequired ?? true)
+        const payer = settings.refundChargedToDefault
+        if (payer) {
+          setChargedTo(payer)
+          setIssue(payer === 'rider' ? 'delivery' : payer === 'foodos' ? 'app' : 'food')
+        }
+      })
       .catch(() => {})
   }, [])
+
+  // The problem decides who pays; "Charged to" can still be changed.
+  function chooseIssue(next: RefundIssue) {
+    setIssue(next)
+    setChargedTo(ISSUE_PAYER[next] === 'rider' && !order.rider ? 'foodos' : ISSUE_PAYER[next])
+  }
+
+  const needsPhoto = photoRequired && chargedTo !== 'foodos'
 
   async function save(event?: FormEvent) {
     event?.preventDefault()
@@ -72,14 +99,26 @@ function PartialRefund({ order, onDone, onClose }: { order: Order; onDone: (orde
     if (!(paise > 0)) return setError('Enter the amount to refund, in rupees')
     if (paise > left) return setError(`At most ${formatMoney(left)} can still be refunded on this order`)
     if (reason.trim().length < 5) return setError('Write the reason (at least 5 characters)')
+    if (needsPhoto && files.length === 0) return setError('Add a photo of the problem')
+    if (files.length > 5) return setError('Attach up to 5 photos')
 
     setBusy(true)
     setError('')
 
     try {
+      const photoIds: string[] = []
+      for (const file of files) {
+        const form = new FormData()
+        form.append('file', file)
+        const { photo } = await api<{ photo: { id: string } }>(`/api/v1/admin/orders/${order.id}/refund-photos`, {
+          method: 'POST',
+          body: form,
+        })
+        photoIds.push(photo.id)
+      }
       const result = await api<{ order: Order }>(`/api/v1/admin/orders/${order.id}/refunds`, {
         method: 'POST',
-        body: { amountPaise: paise, reason: reason.trim(), chargedTo },
+        body: { amountPaise: paise, reason: reason.trim(), chargedTo, issue, photoIds },
       })
       onDone(result.order)
       onClose()
@@ -113,6 +152,17 @@ function PartialRefund({ order, onDone, onClose }: { order: Order; onDone: (orde
           <Field label="Amount (₹)">
             {(id) => <input id={id} className="input" inputMode="decimal" autoFocus value={amount} onChange={(e) => setAmount(e.target.value)} />}
           </Field>
+          <Field label="What went wrong?">
+            {(id) => (
+              <select id={id} className="input" value={issue} onChange={(e) => chooseIssue(e.target.value as RefundIssue)}>
+                {Object.entries(ISSUE_LABEL).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
           <Field
             label="Charged to"
             hint={
@@ -132,6 +182,21 @@ function PartialRefund({ order, onDone, onClose }: { order: Order; onDone: (orde
             )}
           </Field>
         </div>
+        <Field
+          label={needsPhoto ? 'Photos of the problem (needed)' : 'Photos of the problem (optional)'}
+          hint="Up to 5 photos, JPEG or PNG, under 5 MB each. Only Foodos staff can see them."
+        >
+          {(id) => (
+            <input
+              id={id}
+              className="input"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              multiple
+              onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+            />
+          )}
+        </Field>
         <Field label="Reason" hint="The customer sees this with the refund.">
           {(id) => <textarea id={id} className="input" rows={2} maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)} />}
         </Field>
@@ -405,6 +470,7 @@ export default function OrderDetail() {
                                         : refund.destination === 'original'
                                           ? 'To card / UPI'
                                           : null,
+                                      refund.issue ? ISSUE_LABEL[refund.issue] : null,
                                       refund.chargedTo ? `charged to ${CHARGED_TO[refund.chargedTo] || refund.chargedTo}` : null,
                                       refund.reason ? `“${refund.reason}”` : null,
                                     ]
@@ -412,6 +478,7 @@ export default function OrderDetail() {
                                       .join(' · ')}
                                   </div>
                                 )}
+                                {refund.photoIds && refund.photoIds.length > 0 && <RefundPhotos photoIds={refund.photoIds} />}
                               </td>
                               <td className="mono small">{refund.providerRefundId || '—'}</td>
                               <td className="num">{formatMoney(refund.amountPaise)}</td>

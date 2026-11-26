@@ -376,7 +376,11 @@ class IncludeExcludedBody(BaseModel):
 class PartialRefundBody(BaseModel):
     amountPaise: int = Field(gt=0, le=10_000_000)
     reason: str = Field(min_length=5, max_length=200)
-    chargedTo: Literal["restaurant", "rider", "foodos"]
+    # Left out, it follows the problem: food, the restaurant; delivery, the
+    # rider; app, Foodos.
+    chargedTo: Optional[Literal["restaurant", "rider", "foodos"]] = None
+    issue: Optional[Literal["food", "delivery", "app"]] = None
+    photoIds: list[str] = Field(default_factory=list, max_length=5)
 
     @field_validator("reason")
     @classmethod
@@ -387,6 +391,25 @@ class PartialRefundBody(BaseModel):
             raise ValueError("Say why, in a few words")
 
         return value
+
+    @model_validator(mode="after")
+    def _who_pays(self) -> "PartialRefundBody":
+        if self.chargedTo is None:
+            if self.issue is None:
+                raise ValueError("Say what went wrong, or who pays")
+
+            self.chargedTo = {"food": "restaurant", "delivery": "rider", "app": "foodos"}[self.issue]
+
+        return self
+
+
+class RefundApproveBody(BaseModel):
+    # Left out, the amount the restaurant asked for.
+    amountPaise: Optional[int] = Field(default=None, gt=0, le=10_000_000)
+
+
+class RefundRejectBody(BaseModel):
+    reason: str = Field(min_length=3, max_length=200)
 
 
 class CashDepositBody(BaseModel):

@@ -5,6 +5,7 @@ restaurant and rider apps, so the figures agree with what partners see.
 """
 
 from ...database import fetch, fetchrow
+from ..payments import proof
 from ..payouts import settings as payment_settings
 from ..support import service as support_service
 
@@ -207,6 +208,8 @@ async def overview() -> dict:
         "customers": {"total": customers["total"], "newToday": customers["new_today"]},
         # Tickets nobody at Foodos has answered yet.
         "support": {"waiting": await support_service.waiting_count()},
+        # Refunds restaurants have asked for and nobody has decided.
+        "refundRequests": {"waiting": await proof.pending_count()},
         "attention": {
             "waitingForRestaurant": [_stuck_order(row) for row in waiting_for_restaurant],
             "waitingForRider": [_stuck_order(row) for row in waiting_for_rider],

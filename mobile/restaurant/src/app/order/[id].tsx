@@ -14,6 +14,7 @@ import {
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
+import { FoodRefund } from '@/components/FoodRefund'
 import {
   acceptOrder,
   addPrepTime,
@@ -165,6 +166,8 @@ export default function OrderDetailScreen() {
         </View>
 
         {order.refund ? <RefundCard refund={order.refund} /> : null}
+
+        {order.status === 'delivered' ? <FoodRefund orderId={order.id} /> : null}
 
         {order.delivery ? <RiderCard collection={order.delivery} /> : null}
 

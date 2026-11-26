@@ -31,7 +31,8 @@ export default function Layout() {
         '/orders':
           waiting.attention.failedRefunds.length +
           waiting.attention.waitingForRestaurant.length +
-          waiting.attention.waitingForRider.length,
+          waiting.attention.waitingForRider.length +
+          (waiting.refundRequests?.waiting ?? 0),
         '/restaurants': waiting.restaurants.pending,
         '/riders': waiting.riders.pending,
         '/support': waiting.support?.waiting ?? 0,

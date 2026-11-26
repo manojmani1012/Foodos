@@ -131,14 +131,16 @@ function buildUrl(path: string, query?: Query) {
 
 async function send(path: string, options: Options): Promise<Response> {
   const headers: Record<string, string> = {}
-  if (options.body !== undefined) headers['content-type'] = 'application/json'
+  const form = options.body instanceof FormData
+  // A form sets its own content type, with the boundary between its parts.
+  if (options.body !== undefined && !form) headers['content-type'] = 'application/json'
   if (options.auth !== false && accessToken) headers.authorization = `Bearer ${accessToken}`
 
   try {
     return await fetch(buildUrl(path, options.query), {
       method: options.method || 'GET',
       headers,
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      body: form ? (options.body as FormData) : options.body !== undefined ? JSON.stringify(options.body) : undefined,
     })
   } catch {
     throw new ApiError(0, 'network_error', 'Cannot reach the Foodos server. Check your connection and try again')

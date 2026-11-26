@@ -7,9 +7,11 @@ by the `owned_restaurant` dependency.
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
+from pydantic import BaseModel, Field
 
 from ..components.auth.dependencies import CurrentUser, require_role
 from ..components.media.service import MAX_IMAGE_BYTES
+from ..components.payments import proof
 from ..components.payouts import accounts as payout_accounts
 from ..components.payouts import party as payouts
 from ..components.restaurants import menu as menu_service
@@ -64,6 +66,44 @@ async def list_orders(
     restaurant: Any = Depends(owned_restaurant),
 ):
     return {"ok": True, **await portal.list_orders(restaurant["id"], queue, limit)}
+
+
+# A refund the restaurant asks for, with photos. Foodos staff decide.
+class RefundRequestBody(BaseModel):
+    amountPaise: int = Field(gt=0, le=10_000_000)
+    reason: str = Field(min_length=5, max_length=200)
+    photoIds: list[str] = Field(default_factory=list, max_length=5)
+
+
+@router.get("/orders/{order_id}/refunds")
+async def order_refunds(order_id: str, restaurant: Any = Depends(owned_restaurant)):
+    return {"ok": True, **await proof.for_restaurant(order_id, restaurant["id"])}
+
+
+@router.post("/orders/{order_id}/refund-photos", status_code=201)
+async def add_refund_photo(
+    order_id: str,
+    file: UploadFile = File(...),
+    restaurant: Any = Depends(owned_restaurant),
+    user: CurrentUser = Depends(owner_only),
+):
+    photo = await proof.restaurant_photo(order_id, restaurant["id"], user.id, await file.read(MAX_IMAGE_BYTES + 1))
+
+    return {"ok": True, "photo": photo}
+
+
+@router.post("/orders/{order_id}/refund-requests", status_code=201)
+async def request_refund(
+    order_id: str,
+    body: RefundRequestBody,
+    restaurant: Any = Depends(owned_restaurant),
+    user: CurrentUser = Depends(owner_only),
+):
+    result = await proof.create_request(
+        order_id, restaurant["id"], user.id, body.amountPaise, body.reason, body.photoIds
+    )
+
+    return {"ok": True, **result}
 
 
 @router.get("/orders/{order_id}")

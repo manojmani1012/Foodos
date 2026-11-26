@@ -29,6 +29,7 @@ type Form = {
   cashLimit: string
   riderCashBlock: 'cash_orders' | 'all_orders'
   refundChargedToDefault: RefundChargedTo
+  refundPhotoRequired: boolean
   payoutSchedule: Group[]
 }
 
@@ -58,6 +59,7 @@ function toForm(settings: PaymentSettings): Form {
     cashLimit: settings.riderCashLimitPaise == null ? '' : rupees(settings.riderCashLimitPaise),
     riderCashBlock: settings.riderCashBlock ?? 'cash_orders',
     refundChargedToDefault: settings.refundChargedToDefault,
+    refundPhotoRequired: settings.refundPhotoRequired ?? true,
     payoutSchedule: settings.payoutSchedule.map((group) => ({ days: [...group.days].sort(), payWeekday: group.payWeekday })),
   }
 }
@@ -293,6 +295,7 @@ function SettingsForm({
       riderCashLimitPaise: form.cashLimit.trim() === '' ? null : toPaise(form.cashLimit),
       riderCashBlock: form.riderCashBlock,
       refundChargedToDefault: form.refundChargedToDefault,
+      refundPhotoRequired: form.refundPhotoRequired,
       payoutSchedule: form.payoutSchedule.map((group) => ({ days: [...group.days].sort(), payWeekday: group.payWeekday })),
     }
 
@@ -513,6 +516,10 @@ function SettingsForm({
             )}
           </Field>
         </div>
+        <label className="check-row">
+          <input type="checkbox" checked={form.refundPhotoRequired} onChange={(e) => set('refundPhotoRequired', e.target.checked)} />
+          <span>A refund taken off a restaurant's or rider's pay needs a photo</span>
+        </label>
       </Card>
 
       {error && <ErrorBox error={error} />}

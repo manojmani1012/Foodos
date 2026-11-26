@@ -27,6 +27,7 @@ export type Dashboard = {
   customers: { total: number; newToday: number }
   // Tickets nobody at Foodos has answered yet.
   support?: { waiting: number }
+  refundRequests?: { waiting: number }
   attention: { waitingForRestaurant: StuckOrder[]; waitingForRider: StuckOrder[]; failedRefunds: StuckOrder[] }
   daily: { date: string; orders: number; cancelled: number; deliveredPaise: number }[]
 }
@@ -278,6 +279,8 @@ export type Order = {
     processedAt: string | null
     // Partial refunds by Foodos: who bears it, and where the money went.
     chargedTo?: RefundChargedTo | null
+    issue?: RefundIssue | null
+    photoIds?: string[]
     destination?: 'original' | 'wallet' | null
   }[]
   actions: { canCancel: boolean; canRetryRefund: boolean; canAssignRider: boolean }
@@ -414,6 +417,7 @@ export type PaymentSettings = {
   riderCashLimitPaise?: number | null
   riderCashBlock?: 'cash_orders' | 'all_orders'
   refundChargedToDefault: RefundChargedTo
+  refundPhotoRequired?: boolean
   payoutTime?: string
 }
 
@@ -465,6 +469,26 @@ export type BankResult = {
 }
 
 export type RefundChargedTo = 'restaurant' | 'rider' | 'foodos'
+
+// What went wrong: the food, the delivery, or the app.
+export type RefundIssue = 'food' | 'delivery' | 'app'
+
+export type RefundRequest = {
+  id: string
+  orderId: string
+  orderNumber: string
+  restaurantId: string
+  restaurantName: string
+  orderTotalPaise: number
+  amountPaise: number
+  refundedPaise: number | null
+  reason: string
+  status: 'pending' | 'approved' | 'rejected'
+  rejectReason: string | null
+  photoIds: string[]
+  createdAt: string
+  reviewedAt: string | null
+}
 
 export type CountAndAmount = { count: number; netPaise: number }
 

@@ -540,6 +540,11 @@ async def deliver(order_id):
 
 
 class TestPartialRefunds:
+    @pytest.fixture(autouse=True)
+    async def _without_photos(self, client, monkeypatch):
+        """These are about the money; photo proof has its own tests."""
+        monkeypatch.setitem(payment_settings.current(), "refundPhotoRequired", False)
+
     async def test_a_card_payment_is_partly_refunded_and_charged(self, client, admin, fake_gateway, refund_gateway):
         order, _, _ = await paid_order(client, fake_gateway)
         await deliver(order["id"])
